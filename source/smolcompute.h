@@ -177,6 +177,8 @@ SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, cons
 
 void SmolKernelDelete(SmolKernel* kernel)
 {
+    if (kernel == nullptr)
+        return;
     kernel->kernel = nil;
 }
 
