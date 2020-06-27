@@ -23,7 +23,7 @@ void SmolComputeSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset = 0
 void SmolComputeDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
 void SmolFinishWork();
 
-void SmolStartCapture(const char* file);
+void SmolStartCapture();
 void SmolFinishCapture();
 
 #endif // #ifndef SMOL_GFX_INCLUDED
@@ -72,7 +72,7 @@ struct SmolBuffer
 SmolBuffer* SmolBufferCreate(size_t size)
 {
     SmolBuffer* buf = new SmolBuffer();
-    buf->buffer = [s_MetalDevice newBufferWithLength:size options:/*MTLResourceStorageModeManaged*/MTLResourceStorageModeShared];
+    buf->buffer = [s_MetalDevice newBufferWithLength:size options:MTLResourceStorageModeManaged];
     buf->size = size;
     return buf;
 }
