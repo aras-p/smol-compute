@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define SOKOL_IMPL
+#include "external/sokol_time.h"
 
 int main()
 {
