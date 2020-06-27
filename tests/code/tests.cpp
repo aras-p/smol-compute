@@ -5,7 +5,7 @@
 
 int main()
 {
-    if (!SmolGfxInitialize())
+    if (!SmolComputeCreate())
     {
         printf("ERROR: failed to initialize graphics\n");
         return 1;
@@ -15,7 +15,7 @@ int main()
     
     SmolBuffer* bufInput = nullptr;
     SmolBuffer* bufOutput = nullptr;
-    SmolCompute* cs = nullptr;
+    SmolKernel* cs = nullptr;
     
     const int kInputSize = 1024;
     const int kGroupSize = 16;
@@ -53,7 +53,7 @@ int main()
     "        res += bufInput[idx*16+i];\n"
     "    bufOutput[idx] = res;\n"
     "}\n";
-    cs = SmolComputeCreate(kKernelCode, strlen(kKernelCode), "kernelFunc");
+    cs = SmolKernelCreate(kKernelCode, strlen(kKernelCode), "kernelFunc");
     if (cs == nullptr)
     {
         printf("ERROR: failed to create compute shader\n");
@@ -61,10 +61,10 @@ int main()
         goto _cleanup;
     }
     
-    SmolComputeSet(cs);
-    SmolComputeSetBuffer(bufInput, 0);
-    SmolComputeSetBuffer(bufOutput, 1);
-    SmolComputeDispatch(kInputSize, 1, 1, kGroupSize, 1, 1);
+    SmolKernelSet(cs);
+    SmolKernelSetBuffer(bufInput, 0);
+    SmolKernelSetBuffer(bufOutput, 1);
+    SmolKernelDispatch(kInputSize, 1, 1, kGroupSize, 1, 1);
     
     int outputCheck[kOutputSize];
     for (int i = 0; i < kOutputSize; ++i)
@@ -89,8 +89,8 @@ int main()
 _cleanup:
     SmolBufferDelete(bufInput);
     SmolBufferDelete(bufOutput);
-    SmolComputeDestroy(cs);
-    SmolGfxShutdown();
+    SmolKernelDelete(cs);
+    SmolComputeDelete();
     
     if (errors == 0)
         printf("All OK!\n");

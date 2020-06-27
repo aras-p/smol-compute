@@ -1,14 +1,14 @@
-#ifndef SMOL_GFX_INCLUDED
-#define SMOL_GFX_INCLUDED
+#ifndef SMOL_COMPUTE_INCLUDED
+#define SMOL_COMPUTE_INCLUDED
 
 #include <stddef.h>
 
 
 struct SmolBuffer;
-struct SmolCompute;
+struct SmolKernel;
 
-bool SmolGfxInitialize();
-void SmolGfxShutdown();
+bool SmolComputeCreate();
+void SmolComputeDelete();
 
 SmolBuffer* SmolBufferCreate(size_t size);
 void SmolBufferDelete(SmolBuffer* buffer);
@@ -16,21 +16,21 @@ void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t 
 void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset = 0);
 void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer);
 
-SmolCompute* SmolComputeCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
-void SmolComputeDestroy(SmolCompute* compute);
-void SmolComputeSet(SmolCompute* compute);
-void SmolComputeSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset = 0);
-void SmolComputeDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
+void SmolKernelDelete(SmolKernel* kernel);
+void SmolKernelSet(SmolKernel* kernel);
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset = 0);
+void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
 void SmolFinishWork();
 
 void SmolStartCapture();
 void SmolFinishCapture();
 
-#endif // #ifndef SMOL_GFX_INCLUDED
+#endif // #ifndef SMOL_COMPUTE_INCLUDED
 
 
 
-#if SMOL_IMPLEMENTATION
+#if SMOL_COMPUTE_IMPLEMENTATION
 
 #ifndef SMOL_ASSERT
     #include <assert.h>
@@ -38,7 +38,7 @@ void SmolFinishCapture();
 #endif
 
 
-#if SMOL_METAL
+#if SMOL_COMPUTE_METAL
 #if !__has_feature(objc_arc)
     #error "Enable ARC for Metal"
 #endif
@@ -50,15 +50,16 @@ static id<MTLCommandQueue> s_MetalCmdQueue;
 static id<MTLCommandBuffer> s_MetalCmdBuffer;
 static id<MTLComputeCommandEncoder> s_MetalComputeEncoder;
 
-bool SmolGfxInitialize()
+bool SmolComputeCreate()
 {
     s_MetalDevice = MTLCreateSystemDefaultDevice();
     s_MetalCmdQueue = [s_MetalDevice newCommandQueue];
     return true;
 }
 
-void SmolGfxShutdown()
+void SmolComputeDelete()
 {
+    SmolFinishWork();
     s_MetalCmdQueue = nil;
     s_MetalDevice = nil;
 }
@@ -127,12 +128,12 @@ static void StartCmdBufferIfNeeded()
         s_MetalCmdBuffer = [s_MetalCmdQueue commandBufferWithUnretainedReferences];
 }
 
-struct SmolCompute
+struct SmolKernel
 {
-    id<MTLComputePipelineState> compute;
+    id<MTLComputePipelineState> kernel;
 };
 
-SmolCompute* SmolComputeCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
 {
     MTLCompileOptions* opt = [MTLCompileOptions new];
     opt.fastMathEnabled = true; //@TODO
@@ -163,23 +164,23 @@ SmolCompute* SmolComputeCreate(const void* shaderCode, size_t shaderCodeSize, co
     if (error != nil)
     {
         //@TODO
-        //ReportErrorSimple(Format("Metal: Error creating compute pipeline state: %s\n%s\n", [[error localizedDescription] UTF8String], [[error localizedFailureReason] UTF8String]));
+        //ReportErrorSimple(Format("Metal: Error creating kernel pipeline state: %s\n%s\n", [[error localizedDescription] UTF8String], [[error localizedFailureReason] UTF8String]));
         error = nil;
     }
     if (pipe == nil)
         return nullptr;
 
-    SmolCompute* compute = new SmolCompute();
-    compute->compute = pipe;
-    return compute;
+    SmolKernel* kernel = new SmolKernel();
+    kernel->kernel = pipe;
+    return kernel;
 }
 
-void SmolComputeDestroy(SmolCompute* compute)
+void SmolKernelDelete(SmolKernel* kernel)
 {
-    compute->compute = nil;
+    kernel->kernel = nil;
 }
 
-void SmolComputeSet(SmolCompute* compute)
+void SmolKernelSet(SmolKernel* kernel)
 {
     StartCmdBufferIfNeeded();
     if (s_MetalComputeEncoder == nil)
@@ -187,16 +188,16 @@ void SmolComputeSet(SmolCompute* compute)
         FlushActiveEncoders();
         s_MetalComputeEncoder = [s_MetalCmdBuffer computeCommandEncoder];
     }
-    [s_MetalComputeEncoder setComputePipelineState:compute->compute];
+    [s_MetalComputeEncoder setComputePipelineState:kernel->kernel];
 }
 
-void SmolComputeSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset)
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset)
 {
     SMOL_ASSERT(s_MetalComputeEncoder != nil);
     [s_MetalComputeEncoder setBuffer:buffer->buffer offset:bufferOffset atIndex:index];
 }
 
-void SmolComputeDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)
+void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)
 {
     SMOL_ASSERT(s_MetalComputeEncoder != nil);
     int groupsX = (threadsX + groupSizeX-1) / groupSizeX;
@@ -227,5 +228,5 @@ void SmolFinishCapture()
         [capture stopCapture];
 }
 
-#endif // #if SMOL_METAL
-#endif // #if SMOL_IMPLEMENTATION
+#endif // #if SMOL_COMPUTE_METAL
+#endif // #if SMOL_COMPUTE_IMPLEMENTATION
