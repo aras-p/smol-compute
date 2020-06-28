@@ -9,8 +9,15 @@ struct SmolKernel;
 
 enum class SmolBufferType
 {
-    kConstant = 0,
-    kStructured = 1,
+    Constant = 0,
+    Structured,
+};
+
+enum class SmolBufferBinding
+{
+    Constant = 0,
+    Input,
+    Output,
 };
 
 bool SmolComputeCreate();
@@ -25,7 +32,7 @@ void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer);
 SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
 void SmolKernelDelete(SmolKernel* kernel);
 void SmolKernelSet(SmolKernel* kernel);
-void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset = 0);
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding = SmolBufferBinding::Input);
 void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
 void SmolFinishWork();
 
@@ -84,24 +91,26 @@ void SmolComputeDelete()
 
 struct SmolBuffer
 {
-    ID3D11Buffer* buffer;
-    size_t size;
-    SmolBufferType type;
-    size_t structElementSize;
+    ID3D11Buffer* buffer = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
+    ID3D11UnorderedAccessView* uav = nullptr;
+    size_t size = 0;
+    SmolBufferType type = SmolBufferType::Structured;
+    size_t structElementSize = 0;
 };
 
 SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize)
 {
     D3D11_BUFFER_DESC desc = {};
     desc.ByteWidth = (UINT)byteSize;
-    if (type == SmolBufferType::kConstant)
+    if (type == SmolBufferType::Constant)
     {
         SMOL_ASSERT(byteSize % 16 == 0);
         SMOL_ASSERT(structElementSize == 0);
         desc.ByteWidth /= 16;
         desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     }
-    else if (type == SmolBufferType::kStructured)
+    else if (type == SmolBufferType::Structured)
     {
         SMOL_ASSERT(structElementSize != 0 && structElementSize % 4 == 0);
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -129,7 +138,7 @@ void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t 
     SMOL_ASSERT(dstOffset + size <= buffer->size);
 
     const bool fullBufferUpdate = (dstOffset == 0) && (size == buffer->size);
-    if (buffer->type == SmolBufferType::kConstant)
+    if (buffer->type == SmolBufferType::Constant)
     {
         SMOL_ASSERT(fullBufferUpdate);
     }
@@ -177,7 +186,8 @@ void SmolBufferDelete(SmolBuffer* buffer)
 {
     if (buffer == nullptr)
         return;
-    SMOL_ASSERT(buffer->buffer != nullptr);
+    SMOL_RELEASE(buffer->uav);
+    SMOL_RELEASE(buffer->srv);
     SMOL_RELEASE(buffer->buffer);
     delete buffer;
 }
@@ -231,9 +241,49 @@ void SmolKernelSet(SmolKernel* kernel)
     s_D3D11Context->CSSetShader(kernel->kernel, NULL, 0);
 }
 
-void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset)
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding)
 {
-    //@TODO
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(buffer->buffer);
+    switch (binding)
+    {
+    case SmolBufferBinding::Constant:
+        SMOL_ASSERT(buffer->type == SmolBufferType::Constant);
+        s_D3D11Context->CSSetConstantBuffers(index, 1, &buffer->buffer);
+        break;
+    case SmolBufferBinding::Input:
+        SMOL_ASSERT(buffer->type == SmolBufferType::Structured);
+        if (buffer->srv == nullptr)
+        {
+            SMOL_ASSERT(buffer->structElementSize != 0);
+            D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+            desc.Format = DXGI_FORMAT_UNKNOWN;
+            desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+            desc.Buffer.FirstElement = 0;
+            desc.Buffer.NumElements = (UINT)(buffer->size / buffer->structElementSize);
+            HRESULT hr = s_D3D11Device->CreateShaderResourceView(buffer->buffer, &desc, &buffer->srv);
+            SMOL_ASSERT(SUCCEEDED(hr));
+        }
+        s_D3D11Context->CSSetShaderResources(index, 1, &buffer->srv);
+        break;
+    case SmolBufferBinding::Output:
+        SMOL_ASSERT(buffer->type == SmolBufferType::Structured);
+        if (buffer->uav == nullptr)
+        {
+            SMOL_ASSERT(buffer->structElementSize != 0);
+            D3D11_UNORDERED_ACCESS_VIEW_DESC desc = {};
+            desc.Format = DXGI_FORMAT_UNKNOWN;
+            desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            desc.Buffer.FirstElement = 0;
+            desc.Buffer.NumElements = (UINT)(buffer->size / buffer->structElementSize);
+            HRESULT hr = s_D3D11Device->CreateUnorderedAccessView(buffer->buffer, &desc, &buffer->uav);
+            SMOL_ASSERT(SUCCEEDED(hr));
+        }
+        s_D3D11Context->CSSetUnorderedAccessViews(index, 1, &buffer->uav, NULL);
+        break;
+    default:
+        SMOL_ASSERT(false);
+    }
 }
 
 void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)
@@ -410,10 +460,10 @@ void SmolKernelSet(SmolKernel* kernel)
     [s_MetalComputeEncoder setComputePipelineState:kernel->kernel];
 }
 
-void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset)
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding)
 {
     SMOL_ASSERT(s_MetalComputeEncoder != nil);
-    [s_MetalComputeEncoder setBuffer:buffer->buffer offset:bufferOffset atIndex:index];
+    [s_MetalComputeEncoder setBuffer:buffer->buffer offset:0 atIndex:index];
 }
 
 void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)

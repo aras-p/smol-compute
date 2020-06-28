@@ -18,8 +18,8 @@ static bool SmokeTest()
     const int kInputSize = 1024;
     const int kGroupSize = 16;
     const int kOutputSize = kInputSize / kGroupSize;
-    bufInput = SmolBufferCreate(kInputSize*4, SmolBufferType::kStructured, 4);
-    bufOutput = SmolBufferCreate(kOutputSize*4, SmolBufferType::kStructured, 4);
+    bufInput = SmolBufferCreate(kInputSize*4, SmolBufferType::Structured, 4);
+    bufOutput = SmolBufferCreate(kOutputSize*4, SmolBufferType::Structured, 4);
     int input[kInputSize];
     for (int i = 0; i < kInputSize; ++i)
         input[i] = i * 17;
@@ -66,7 +66,7 @@ static bool SmokeTest()
     
     SmolKernelSet(cs);
     SmolKernelSetBuffer(bufInput, 0);
-    SmolKernelSetBuffer(bufOutput, 1);
+    SmolKernelSetBuffer(bufOutput, 1, SmolBufferBinding::Output);
     SmolKernelDispatch(kInputSize, 1, 1, kGroupSize, 1, 1);
     
     int outputCheck[kOutputSize];
@@ -158,9 +158,9 @@ static bool IspcCompressBC3Test()
         goto _cleanup;
     }
     
-    bufInput = SmolBufferCreate(inputSize+4, SmolBufferType::kStructured, 4);
-    bufOutput = SmolBufferCreate(outputSize+4, SmolBufferType::kStructured, 4);
-    bufGlobals = SmolBufferCreate(sizeof(Globals_Type), SmolBufferType::kConstant);
+    bufInput = SmolBufferCreate(inputSize+4, SmolBufferType::Structured, 4);
+    bufOutput = SmolBufferCreate(outputSize+4, SmolBufferType::Structured, 4);
+    bufGlobals = SmolBufferCreate(sizeof(Globals_Type), SmolBufferType::Constant);
     
     Globals_Type glob;
     glob.inputOffset = 0;
@@ -178,9 +178,9 @@ static bool IspcCompressBC3Test()
         SmolBufferSetData(bufGlobals, &glob, sizeof(glob));
         
         SmolKernelSet(cs);
-        SmolKernelSetBuffer(bufInput, 2);
-        SmolKernelSetBuffer(bufOutput, 0);
-        SmolKernelSetBuffer(bufGlobals, 1);
+        SmolKernelSetBuffer(bufInput, 2, SmolBufferBinding::Input);
+        SmolKernelSetBuffer(bufOutput, 0, SmolBufferBinding::Output);
+        SmolKernelSetBuffer(bufGlobals, 1, SmolBufferBinding::Constant);
         SmolKernelDispatch(kImageSize, kImageSize, 1, kGroupSize, kGroupSize, 1);
         
         SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
