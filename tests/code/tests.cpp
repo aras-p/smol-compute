@@ -119,6 +119,14 @@ static bool IspcCompressBC3Test()
     
     const int kImageSize = 512;
     const int kGroupSize = 8;
+#ifdef _MSC_VER
+    const int kStartSpace = 0;
+    #define kExtension "hlsl"
+#else
+    const int kStartSpace = 4;
+    #define kExtension "metal"
+#endif
+
 
     size_t inputSize, outputSize, kernelSourceSize;
     void* inputData = nullptr;
@@ -135,7 +143,7 @@ static bool IspcCompressBC3Test()
     outputDataExpected = ReadFile("tests/data/ispc-compress-bc3/output512.bin", &outputSize);
     if (outputDataExpected == nullptr)
         goto _cleanup;
-    kernelSource = ReadFile("tests/data/ispc-compress-bc3/kernel.metal", &kernelSourceSize);
+    kernelSource = ReadFile("tests/data/ispc-compress-bc3/kernel." kExtension, &kernelSourceSize);
     if (kernelSource == nullptr)
         goto _cleanup;
     
@@ -157,9 +165,9 @@ static bool IspcCompressBC3Test()
         printf("ERROR: IspcCompressBC3Test: failed to create compute shader\n");
         goto _cleanup;
     }
-    
-    bufInput = SmolBufferCreate(inputSize+4, SmolBufferType::Structured, 4);
-    bufOutput = SmolBufferCreate(outputSize+4, SmolBufferType::Structured, 4);
+   
+    bufInput = SmolBufferCreate(inputSize + kStartSpace, SmolBufferType::Structured, 4);
+    bufOutput = SmolBufferCreate(outputSize + kStartSpace, SmolBufferType::Structured, 4);
     bufGlobals = SmolBufferCreate(sizeof(Globals_Type), SmolBufferType::Constant);
     
     Globals_Type glob;
@@ -173,7 +181,7 @@ static bool IspcCompressBC3Test()
     for (int i = 0; i < 10; ++i)
     {
         tStart = stm_now();
-        SmolBufferSetData(bufInput, inputData, inputSize, 4);
+        SmolBufferSetData(bufInput, inputData, inputSize, kStartSpace);
         
         SmolBufferSetData(bufGlobals, &glob, sizeof(glob));
         
@@ -185,7 +193,7 @@ static bool IspcCompressBC3Test()
         
         SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
         SmolFinishWork();
-        SmolBufferGetData(bufOutput, outputData, outputSize, 4);
+        SmolBufferGetData(bufOutput, outputData, outputSize, kStartSpace);
         tDur = stm_since(tStart);
         printf("  BC3 set+compress+get for %ix%i took %.1fms\n", glob.image_width, glob.image_height, stm_ms(tDur));
     }

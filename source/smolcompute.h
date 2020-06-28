@@ -105,9 +105,8 @@ SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t struct
     desc.ByteWidth = (UINT)byteSize;
     if (type == SmolBufferType::Constant)
     {
-        SMOL_ASSERT(byteSize % 16 == 0);
         SMOL_ASSERT(structElementSize == 0);
-        desc.ByteWidth /= 16;
+        desc.ByteWidth = (desc.ByteWidth + 15) / 16 * 16;
         desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     }
     else if (type == SmolBufferType::Structured)
