@@ -7,10 +7,16 @@
 struct SmolBuffer;
 struct SmolKernel;
 
+enum class SmolBufferType
+{
+    kConstant = 0,
+    kStructured = 1,
+};
+
 bool SmolComputeCreate();
 void SmolComputeDelete();
 
-SmolBuffer* SmolBufferCreate(size_t size);
+SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize = 0);
 void SmolBufferDelete(SmolBuffer* buffer);
 void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t dstOffset = 0);
 void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset = 0);
@@ -32,15 +38,225 @@ void SmolFinishCapture();
 
 #if SMOL_COMPUTE_IMPLEMENTATION
 
+#if !SMOL_COMPUTE_D3D11 && !SMOL_COMPUTE_METAL
+#error Define one of SMOL_COMPUTE_D3D11 or SMOL_COMPUTE_METAL for a SMOL_COMPUTE_IMPLEMENTATION compile.
+#endif
+
 #ifndef SMOL_ASSERT
     #include <assert.h>
     #define SMOL_ASSERT(c) assert(c)
 #endif
 
 
+// ------------------------------------------------------------------------------------------------
+//  D3D11
+
+
+#if SMOL_COMPUTE_D3D11
+#include <d3d11.h>
+#include <d3dcompiler.h>
+
+static ID3D11Device* s_D3D11Device;
+static ID3D11DeviceContext* s_D3D11Context;
+
+#define SMOL_RELEASE(o) { if (o) (o)->Release(); (o) = nullptr; }
+
+bool SmolComputeCreate()
+{
+    HRESULT hr;
+    D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0 };
+#ifdef _DEBUG
+    hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_DEBUG, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
+#endif
+    if (s_D3D11Device == nullptr)
+        hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
+    if (FAILED(hr))
+        return false;
+    return true;
+}
+
+void SmolComputeDelete()
+{
+    SmolFinishWork();
+    SMOL_RELEASE(s_D3D11Context);
+    SMOL_RELEASE(s_D3D11Device);
+}
+
+struct SmolBuffer
+{
+    ID3D11Buffer* buffer;
+    size_t size;
+    SmolBufferType type;
+    size_t structElementSize;
+};
+
+SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize)
+{
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = (UINT)byteSize;
+    if (type == SmolBufferType::kConstant)
+    {
+        SMOL_ASSERT(byteSize % 16 == 0);
+        SMOL_ASSERT(structElementSize == 0);
+        desc.ByteWidth /= 16;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    }
+    else if (type == SmolBufferType::kStructured)
+    {
+        SMOL_ASSERT(structElementSize != 0 && structElementSize % 4 == 0);
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+        desc.StructureByteStride = (UINT)structElementSize;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    }
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.CPUAccessFlags = 0;
+    ID3D11Buffer* buffer = nullptr;
+    HRESULT hr = s_D3D11Device->CreateBuffer(&desc, NULL, &buffer);
+    if (FAILED(hr))
+        return nullptr;
+
+    SmolBuffer* buf = new SmolBuffer();
+    buf->buffer = buffer;
+    buf->size = byteSize;
+    buf->type = type;
+    buf->structElementSize = structElementSize;
+    return buf;
+}
+
+void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t dstOffset)
+{
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(dstOffset + size <= buffer->size);
+
+    const bool fullBufferUpdate = (dstOffset == 0) && (size == buffer->size);
+    if (buffer->type == SmolBufferType::kConstant)
+    {
+        SMOL_ASSERT(fullBufferUpdate);
+    }
+    D3D11_BOX box = {};
+    box.left = (UINT)dstOffset;
+    box.right = (UINT)(dstOffset + size);
+    box.bottom = box.back = 1;
+    s_D3D11Context->UpdateSubresource(buffer->buffer, 0, fullBufferUpdate ? NULL : &box, src, 0, 0);
+}
+
+void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset)
+{
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(srcOffset + size <= buffer->size);
+
+    ID3D11Buffer* staging = nullptr;
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = (UINT)size;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.MiscFlags = 0;
+    desc.StructureByteStride = (UINT)buffer->structElementSize;
+    HRESULT hr = s_D3D11Device->CreateBuffer(&desc, NULL, &staging);
+    if (FAILED(hr))
+        return;
+
+    D3D11_BOX box = {};
+    box.left = (UINT)srcOffset;
+    box.right = (UINT)(srcOffset + size);
+    box.bottom = box.back = 1;
+    s_D3D11Context->CopySubresourceRegion(staging, 0, 0, 0, 0, buffer->buffer, 0, &box);
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    hr = s_D3D11Context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(dst, mapped.pData, size);
+        s_D3D11Context->Unmap(staging, 0);
+    }
+    SMOL_RELEASE(staging);
+}
+
+void SmolBufferDelete(SmolBuffer* buffer)
+{
+    if (buffer == nullptr)
+        return;
+    SMOL_ASSERT(buffer->buffer != nullptr);
+    SMOL_RELEASE(buffer->buffer);
+    delete buffer;
+}
+
+void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer)
+{
+}
+
+struct SmolKernel
+{
+    ID3D11ComputeShader* kernel;
+};
+
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
+{
+    ID3DBlob* bytecode = nullptr;
+    ID3DBlob* errors = nullptr;
+    HRESULT hr = D3DCompile(shaderCode, shaderCodeSize, "", NULL, NULL, entryPoint, "cs_5_0", 0, 0, &bytecode, &errors);
+    if (FAILED(hr))
+    {
+        const char* errMsg = (const char*)errors->GetBufferPointer();
+        SMOL_RELEASE(bytecode);
+        SMOL_RELEASE(errors);
+        return nullptr;
+    }
+
+    ID3D11ComputeShader* cs = nullptr;
+    hr = s_D3D11Device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), NULL, &cs);
+    if (FAILED(hr))
+    {
+        SMOL_RELEASE(bytecode);
+        SMOL_RELEASE(errors);
+        return nullptr;
+    }
+
+    SmolKernel* kernel = new SmolKernel();
+    kernel->kernel = cs;
+    return kernel;
+}
+
+void SmolKernelDelete(SmolKernel* kernel)
+{
+    if (kernel == nullptr)
+        return;
+    SMOL_RELEASE(kernel->kernel);
+    delete kernel;
+}
+
+void SmolKernelSet(SmolKernel* kernel)
+{
+    s_D3D11Context->CSSetShader(kernel->kernel, NULL, 0);
+}
+
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, size_t bufferOffset)
+{
+    //@TODO
+}
+
+void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)
+{
+    int groupsX = (threadsX + groupSizeX - 1) / groupSizeX;
+    int groupsY = (threadsY + groupSizeY - 1) / groupSizeY;
+    int groupsZ = (threadsZ + groupSizeZ - 1) / groupSizeZ;
+    s_D3D11Context->Dispatch(groupsX, groupsY, groupsZ);
+}
+
+void SmolFinishWork()
+{
+}
+
+#endif // #if SMOL_COMPUTE_D3D11
+
+
+// ------------------------------------------------------------------------------------------------
+//  Metal
+
 #if SMOL_COMPUTE_METAL
 #if !__has_feature(objc_arc)
-    #error "Enable ARC for Metal"
+    #error Enable ARC for Metal
 #endif
 #include <TargetConditionals.h>
 #import <Metal/Metal.h>
@@ -70,7 +286,7 @@ struct SmolBuffer
     size_t size;
 };
 
-SmolBuffer* SmolBufferCreate(size_t size)
+SmolBuffer* SmolBufferCreate(size_t size, SmolBufferType type, size_t structElementSize)
 {
     SmolBuffer* buf = new SmolBuffer();
     buf->buffer = [s_MetalDevice newBufferWithLength:size options:MTLResourceStorageModeManaged];
@@ -180,6 +396,7 @@ void SmolKernelDelete(SmolKernel* kernel)
     if (kernel == nullptr)
         return;
     kernel->kernel = nil;
+    delete kernel;
 }
 
 void SmolKernelSet(SmolKernel* kernel)
@@ -231,4 +448,5 @@ void SmolFinishCapture()
 }
 
 #endif // #if SMOL_COMPUTE_METAL
+
 #endif // #if SMOL_COMPUTE_IMPLEMENTATION

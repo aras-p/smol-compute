@@ -1,5 +1,6 @@
 #include "../../source/smolcompute.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SOKOL_IMPL
@@ -17,8 +18,8 @@ static bool SmokeTest()
     const int kInputSize = 1024;
     const int kGroupSize = 16;
     const int kOutputSize = kInputSize / kGroupSize;
-    bufInput = SmolBufferCreate(kInputSize*4);
-    bufOutput = SmolBufferCreate(kOutputSize*4);
+    bufInput = SmolBufferCreate(kInputSize*4, SmolBufferType::kStructured, 4);
+    bufOutput = SmolBufferCreate(kOutputSize*4, SmolBufferType::kStructured, 4);
     int input[kInputSize];
     for (int i = 0; i < kInputSize; ++i)
         input[i] = i * 17;
@@ -38,17 +39,24 @@ static bool SmokeTest()
     
     const char* kKernelCode;
     kKernelCode =
-    "kernel void kernelFunc(\n"
-    "const device uint* bufInput [[buffer(0)]],\n"
-    "device uint* bufOutput [[buffer(1)]],\n"
-    "uint2 gid [[thread_position_in_grid]])\n"
-    "{\n"
-    "    uint idx = gid.x;\n"
-    "    uint res = 0;\n"
-    "    for (int i = 0; i < 16; ++i)\n"
-    "        res += bufInput[idx*16+i];\n"
-    "    bufOutput[idx] = res;\n"
-    "}\n";
+#ifdef _MSC_VER
+        "StructuredBuffer<uint> bufInput : register(t0);\n"
+        "RWStructuredBuffer<uint> bufOutput : register(u1);\n"
+        "[numthreads(16, 1, 1)]\n"
+        "void kernelFunc(uint3 gid : SV_DispatchThreadID)\n"
+#else
+        "kernel void kernelFunc(\n"
+        "const device uint* bufInput [[buffer(0)]],\n"
+        "device uint* bufOutput [[buffer(1)]],\n"
+        "uint2 gid [[thread_position_in_grid]])\n"
+#endif
+        "{\n"
+        "    uint idx = gid.x;\n"
+        "    uint res = 0;\n"
+        "    for (int i = 0; i < 16; ++i)\n"
+        "        res += bufInput[idx*16+i];\n"
+        "    bufOutput[idx] = res;\n"
+        "}\n";
     cs = SmolKernelCreate(kKernelCode, strlen(kKernelCode), "kernelFunc");
     if (cs == nullptr)
     {
@@ -150,9 +158,9 @@ static bool IspcCompressBC3Test()
         goto _cleanup;
     }
     
-    bufInput = SmolBufferCreate(inputSize+4);
-    bufOutput = SmolBufferCreate(outputSize+4);
-    bufGlobals = SmolBufferCreate(sizeof(Globals_Type));
+    bufInput = SmolBufferCreate(inputSize+4, SmolBufferType::kStructured, 4);
+    bufOutput = SmolBufferCreate(outputSize+4, SmolBufferType::kStructured, 4);
+    bufGlobals = SmolBufferCreate(sizeof(Globals_Type), SmolBufferType::kConstant);
     
     Globals_Type glob;
     glob.inputOffset = 0;

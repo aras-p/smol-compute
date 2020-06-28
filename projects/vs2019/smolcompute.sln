@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30011.22
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "smolcompute", "smolcompute.vcxproj", "{9D9ADA6B-655F-448B-9410-3C55DFCA077F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9D9ADA6B-655F-448B-9410-3C55DFCA077F}.Debug|x64.ActiveCfg = Debug|x64
+		{9D9ADA6B-655F-448B-9410-3C55DFCA077F}.Debug|x64.Build.0 = Debug|x64
+		{9D9ADA6B-655F-448B-9410-3C55DFCA077F}.Release|x64.ActiveCfg = Release|x64
+		{9D9ADA6B-655F-448B-9410-3C55DFCA077F}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {68528ED3-A517-4560-B955-9B738DD43FA6}
+	EndGlobalSection
+EndGlobal
