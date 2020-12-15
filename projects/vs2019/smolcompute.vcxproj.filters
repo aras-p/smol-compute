@@ -2,10 +2,27 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClInclude Include="..\..\source\smolcompute.h" />
-    <ClInclude Include="..\..\tests\code\external\sokol_time.h" />
+    <ClInclude Include="..\..\tests\code\external\sokol_time.h">
+      <Filter>external</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\tests\code\external\stb_image.h">
+      <Filter>external</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\tests\code\external\stb_image_write.h">
+      <Filter>external</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\tests\code\external\rgbcx.h">
+      <Filter>external</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\tests\code\smolcompute_impl_d3d11.cpp" />
     <ClCompile Include="..\..\tests\code\tests.cpp" />
+    <ClCompile Include="..\..\tests\code\externals_impl.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="external">
+      <UniqueIdentifier>{3b5ff9c4-0f70-4c3e-9d23-989941f43e66}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>

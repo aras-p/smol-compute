@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SOKOL_IMPL
 #include "external/sokol_time.h"
-
+#include "external/stb_image.h"
+#include "external/stb_image_write.h"
+#include "external/rgbcx.h"
 
 static bool SmokeTest()
 {
@@ -108,28 +109,75 @@ static void* ReadFile(const char* path, size_t* outSize)
     *outSize = ftell(f);
     fseek(f, 0, SEEK_SET);
     void* buffer = malloc(*outSize);
+    if (buffer == nullptr)
+        return nullptr;
     fread(buffer, *outSize, 1, f);
     fclose(f);
     return buffer;
 }
 
+
+static void store_block_4x4(unsigned char block[16 * 4], int x, int y, int width, int height, unsigned char* rgba)
+{
+    int storeX = (x + 4 > width) ? width - x : 4;
+    int storeY = (y + 4 > height) ? height - y : 4;
+    for (int row = 0; row < storeY; ++row)
+    {
+        unsigned char* dst = rgba + (y + row) * width * 4 + x * 4;
+        memcpy(dst, block + row * 4 * 4, storeX * 4);
+    }
+}
+
+static void decompress_dxtc(int width, int height, bool alpha, const unsigned char* input, unsigned char* rgba)
+{
+    int blocksX = (width + 3) / 4;
+    int blocksY = (height + 3) / 4;
+    for (int by = 0; by < blocksY; ++by)
+    {
+        for (int bx = 0; bx < blocksX; ++bx)
+        {
+            unsigned char block[16 * 4];
+            if (alpha)
+            {
+                rgbcx::unpack_bc3(input, block);
+                input += 16;
+            }
+            else
+            {
+                rgbcx::unpack_bc1(input, block, true);
+                input += 8;
+            }
+            store_block_4x4(block, bx * 4, by * 4, width, height, rgba);
+        }
+    }
+}
+
+static void save_bc3_result_image(const char* fn, int width, int height, const void* data)
+{
+    unsigned char* rgba = new unsigned char[width * height * 4];
+    decompress_dxtc(width, height, true, (const unsigned char*)data, rgba);
+    stbi_flip_vertically_on_write(1);
+    stbi_write_tga(fn, width, height, 4, rgba);
+    delete[] rgba;
+}
+
+
 static bool IspcCompressBC3Test()
 {
+    rgbcx::init();
     bool ok = false;
-    
-    const int kImageSize = 512;
+
     const int kGroupSize = 8;
 #ifdef _MSC_VER
     const int kStartSpace = 0;
-    #define kExtension "hlsl"
+#define kExtension "hlsl"
 #else
     const int kStartSpace = 4;
-    #define kExtension "metal"
+#define kExtension "metal"
 #endif
 
 
     size_t inputSize, outputSize, kernelSourceSize;
-    void* inputData = nullptr;
     void* outputData = nullptr;
     void* outputDataExpected = nullptr;
     void* kernelSource = nullptr;
@@ -137,15 +185,27 @@ static bool IspcCompressBC3Test()
     SmolKernel *cs = nullptr;
     uint64_t tStart = 0, tDur = 0;
 
-    inputData = ReadFile("tests/data/ispc-compress-bc3/input512.bin", &inputSize);
-    if (inputData == nullptr)
+    int inputWidth = 0, inputHeight = 0;
+    stbi_set_flip_vertically_on_load(1);
+    stbi_uc* inputImage = stbi_load("tests/data/ispc-compress-bc3/16x16.tga", &inputWidth, &inputHeight, nullptr, 4);
+    if (inputImage == nullptr)
+    {
+        printf("ERROR: IspcCompressBC3Test: failed to read input image\n");
         goto _cleanup;
-    outputDataExpected = ReadFile("tests/data/ispc-compress-bc3/output512.bin", &outputSize);
+    }
+    inputSize = inputWidth * inputHeight * 4;
+    outputDataExpected = ReadFile("tests/data/ispc-compress-bc3/16x16_out.bin", &outputSize);
     if (outputDataExpected == nullptr)
+    {
+        printf("ERROR: IspcCompressBC3Test: failed to read output bytes\n");
         goto _cleanup;
+    }
     kernelSource = ReadFile("tests/data/ispc-compress-bc3/kernel." kExtension, &kernelSourceSize);
     if (kernelSource == nullptr)
+    {
+        printf("ERROR: IspcCompressBC3Test: failed to read shader source\n");
         goto _cleanup;
+    }
     
     struct Globals_Type
     {
@@ -173,15 +233,15 @@ static bool IspcCompressBC3Test()
     Globals_Type glob;
     glob.inputOffset = 0;
     glob.outputOffset = 0;
-    glob.image_width = kImageSize;
-    glob.image_height = kImageSize;
-    glob.width_in_blocks = kImageSize/4;
-    glob.height_in_blocks = kImageSize/4;
+    glob.image_width = inputWidth;
+    glob.image_height = inputHeight;
+    glob.width_in_blocks = inputWidth / 4;
+    glob.height_in_blocks = inputHeight / 4;
     
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 15; ++i)
     {
         tStart = stm_now();
-        SmolBufferSetData(bufInput, inputData, inputSize, kStartSpace);
+        SmolBufferSetData(bufInput, inputImage, inputSize, kStartSpace);
         
         SmolBufferSetData(bufGlobals, &glob, sizeof(glob));
         
@@ -189,7 +249,7 @@ static bool IspcCompressBC3Test()
         SmolKernelSetBuffer(bufInput, 2, SmolBufferBinding::Input);
         SmolKernelSetBuffer(bufOutput, 0, SmolBufferBinding::Output);
         SmolKernelSetBuffer(bufGlobals, 1, SmolBufferBinding::Constant);
-        SmolKernelDispatch(kImageSize, kImageSize, 1, kGroupSize, kGroupSize, 1);
+        SmolKernelDispatch(inputWidth, inputHeight, 1, kGroupSize, kGroupSize, 1);
         
         SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
         SmolFinishWork();
@@ -209,10 +269,16 @@ static bool IspcCompressBC3Test()
             uint32_t ptrv = ptr[i], expv = exp[i];
             if (ptrv != expv)
             {
-                printf("    does not match at index %i: %08x vs %0x8\n", i, ptrv, expv);
+                printf("    does not match at index %i: got %08x exp %0x8\n", i, ptrv, expv);
                 ++printed;
             }
         }
+        printf("  %i words mismatch\n", printed);
+        const char* expTga = "tests/data/ispc-compress-bc3/16x16_exp.tga";
+        const char* gotTga = "tests/data/ispc-compress-bc3/16x16_got.tga";
+        save_bc3_result_image(expTga, inputWidth, inputHeight, outputDataExpected);
+        save_bc3_result_image(gotTga, inputWidth, inputHeight, outputData);
+        printf("  images written to %s and %s\n", expTga, gotTga);
         goto _cleanup;
     }
     
@@ -224,7 +290,7 @@ _cleanup:
     SmolBufferDelete(bufOutput);
     SmolBufferDelete(bufGlobals);
     SmolKernelDelete(cs);
-    if (inputData != nullptr) free(inputData);
+    if (inputImage != nullptr) stbi_image_free(inputImage);
     if (outputData != nullptr) free(outputData);
     if (outputDataExpected != nullptr) free(outputDataExpected);
     return ok;

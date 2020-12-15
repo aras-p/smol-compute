@@ -12,9 +12,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\source\smolcompute.h" />
+    <ClInclude Include="..\..\tests\code\external\rgbcx.h" />
     <ClInclude Include="..\..\tests\code\external\sokol_time.h" />
+    <ClInclude Include="..\..\tests\code\external\stb_image.h" />
+    <ClInclude Include="..\..\tests\code\external\stb_image_write.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\tests\code\externals_impl.cpp" />
     <ClCompile Include="..\..\tests\code\smolcompute_impl_d3d11.cpp" />
     <ClCompile Include="..\..\tests\code\tests.cpp" />
   </ItemGroup>
