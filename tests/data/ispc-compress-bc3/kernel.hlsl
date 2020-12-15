@@ -132,7 +132,7 @@ void compute_axis(out float axis[4], float covar[10], uint powerIterations, int 
             for (p=0; p<channels; p++)
                 norm_sq += axis[p]*axis[p];
 
-            float rnorm = rsqrt(norm_sq);
+            float rnorm = 1.0 / sqrt(norm_sq);
             for (p=0; p<channels; p++) vec[p] *= rnorm;
         }
     }
@@ -159,7 +159,7 @@ void pick_endpoints(out float3 c0, out float3 c1, float3 block[16], float3 axis,
     }
 
     float norm_sq = dot(axis, axis);
-    float rnorm_sq = rcp(norm_sq);
+    float rnorm_sq = 1.0 / norm_sq;
     c0 = clamp(dc+min_dot*rnorm_sq*axis, 0, 255);
     c1 = clamp(dc+max_dot*rnorm_sq*axis, 0, 255);
 }
@@ -171,7 +171,7 @@ uint fast_quant(float3 block[16], int p0, int p1)
 
     float3 dir = c1-c0;
     float sq_norm = dot(dir, dir);
-    float rsq_norm = rcp(sq_norm);
+    float rsq_norm = 1.0 / sq_norm;
     dir *= rsq_norm*3;
 
     float bias = 0.5;
@@ -230,7 +230,7 @@ void bc1_refine(int pe[2], float3 block[16], uint bits, float3 dc)
         float Cxx = 16*3*3-2*3*sum_q+sum_qq;
         float Cyy = sum_qq;
         float Cxy = 3*sum_q-sum_qq;
-        float scale = 3 * rcp(Cxx*Cyy - Cxy*Cxy);
+        float scale = 3 * (1.0 / (Cxx*Cyy - Cxy*Cxy));
 
         c0 = (Atb1*Cyy - Atb2*Cxy)*scale;
         c1 = (Atb2*Cxx - Atb1*Cxy)*scale;

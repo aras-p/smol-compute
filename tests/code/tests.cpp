@@ -269,7 +269,7 @@ static bool IspcCompressBC3Test()
             uint32_t ptrv = ptr[i], expv = exp[i];
             if (ptrv != expv)
             {
-                printf("    does not match at index %i: got %08x exp %0x8\n", i, ptrv, expv);
+                printf("    does not match at index %i: got %08x exp %08x\n", i, ptrv, expv);
                 ++printed;
             }
         }
