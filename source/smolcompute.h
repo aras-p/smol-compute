@@ -1,33 +1,64 @@
 #ifndef SMOL_COMPUTE_INCLUDED
 #define SMOL_COMPUTE_INCLUDED
 
+// smol-compute: a small library to run compute shaders on several graphics APIs.
+//
+// This is a single-header library; for regular usage just include this header,
+// but you also have to do a:
+//   #define SMOL_COMPUTE_IMPLEMENTATION 1
+//   #define SMOL_COMPUTE_<graphicsapi> 1
+//   #include "smolcompute.h"
+// in one of your compiled files. Current implementations are for D3D11 (SMOL_COMPUTE_D3D11)
+// and Metal (SMOL_COMPUTE_METAL).
+
+
 #include <stddef.h>
 
 
 struct SmolBuffer;
 struct SmolKernel;
 
+
+// Data buffer type
 enum class SmolBufferType
 {
-    Constant = 0,
-    Structured,
+    Constant = 0,   // D3D11: constant buffer, Metal: does not care
+    Structured,     // D3D11: structured buffer, Metal: does not care
 };
 
+// Binding "space" for buffer usage
 enum class SmolBufferBinding
 {
-    Constant = 0,
-    Input,
-    Output,
+    Constant = 0,   // D3D11: constant buffer, Metal: does not care
+    Input,          // D3D11: input (StructuredBuffer), Metal: does not care
+    Output,         // D3D11: output (RWStructuredBuffer), Metal: does not care
 };
 
+
+// Initialize the library. This has to be called before doing other work.
 bool SmolComputeCreate();
+// Shutdown the library.
 void SmolComputeDelete();
+
+
+// Data buffers: create, delete, set and get data.
+// - All sizes are in bytes.
+// - structElementSize is for structured buffers, some APIs need to know that.
+// - If a GPU writes into some buffer and you want to do GetData on it,
+//   call MakeGpuDataVisibleToCpu once before doing the call. Some APIs require
+//   explicit synchronization before reading the data.
 
 SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize = 0);
 void SmolBufferDelete(SmolBuffer* buffer);
 void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t dstOffset = 0);
 void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset = 0);
 void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer);
+
+
+// Computation kernels: create, delete, set them up (Set + SetBuffer), dispatch and wait
+// for dispatches to complete.
+// - Dispatch is number of "threads" launched, not number of "thread groups".
+// - Some APIs require a call FinishWork before reading data back to CPU.
 
 SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
 void SmolKernelDelete(SmolKernel* kernel);
