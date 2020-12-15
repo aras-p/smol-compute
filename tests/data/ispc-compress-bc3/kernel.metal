@@ -1,3 +1,7 @@
+// BC3 compression code ported over from
+// https://github.com/GameTechDev/ISPCTextureCompressor/blob/master/ispc_texcomp/kernel.ispc
+// into HLSL, and converted into Metal via Unity's shader compilation pipeline
+
 #include <metal_stdlib>
 #include <metal_texture>
 using namespace metal;

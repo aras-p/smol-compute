@@ -1,3 +1,5 @@
+// BC3 compression code ported over from
+// https://github.com/GameTechDev/ISPCTextureCompressor/blob/master/ispc_texcomp/kernel.ispc
 
 // ugly, but makes BC1 compression 20% faster overall
 void compute_covar_dc_ugly(out float covar[6], out float3 dc, float3 block[16])
