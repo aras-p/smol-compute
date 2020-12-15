@@ -169,10 +169,8 @@ static bool IspcCompressBC3Test()
 
     const int kGroupSize = 8;
 #ifdef _MSC_VER
-    const int kStartSpace = 0;
 #define kExtension "hlsl"
 #else
-    const int kStartSpace = 4;
 #define kExtension "metal"
 #endif
 
@@ -226,8 +224,8 @@ static bool IspcCompressBC3Test()
         goto _cleanup;
     }
    
-    bufInput = SmolBufferCreate(inputSize + kStartSpace, SmolBufferType::Structured, 4);
-    bufOutput = SmolBufferCreate(outputSize + kStartSpace, SmolBufferType::Structured, 4);
+    bufInput = SmolBufferCreate(inputSize, SmolBufferType::Structured, 4);
+    bufOutput = SmolBufferCreate(outputSize, SmolBufferType::Structured, 4);
     bufGlobals = SmolBufferCreate(sizeof(Globals_Type), SmolBufferType::Constant);
     
     Globals_Type glob;
@@ -241,7 +239,7 @@ static bool IspcCompressBC3Test()
     for (int i = 0; i < 15; ++i)
     {
         tStart = stm_now();
-        SmolBufferSetData(bufInput, inputImage, inputSize, kStartSpace);
+        SmolBufferSetData(bufInput, inputImage, inputSize, 0);
         
         SmolBufferSetData(bufGlobals, &glob, sizeof(glob));
         
@@ -253,7 +251,7 @@ static bool IspcCompressBC3Test()
         
         SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
         SmolFinishWork();
-        SmolBufferGetData(bufOutput, outputData, outputSize, kStartSpace);
+        SmolBufferGetData(bufOutput, outputData, outputSize, 0);
         tDur = stm_since(tStart);
         printf("  BC3 set+compress+get for %ix%i took %.1fms\n", glob.image_width, glob.image_height, stm_ms(tDur));
     }

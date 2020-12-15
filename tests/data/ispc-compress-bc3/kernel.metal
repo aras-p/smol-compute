@@ -1,23 +1,348 @@
 // BC3 compression code ported over from
 // https://github.com/GameTechDev/ISPCTextureCompressor/blob/master/ispc_texcomp/kernel.ispc
-// into HLSL, and converted into Metal via Unity's shader compilation pipeline
+
 
 #include <metal_stdlib>
-#include <metal_texture>
 using namespace metal;
 
-#if !(__HAVE_FMA__)
-#define fma(a,b,c) ((a) * (b) + (c))
-#endif
-
-constant float4 ImmCB_0[4] =
+// ugly, but makes BC1 compression 20% faster overall
+float3 compute_covar_dc_ugly(float covar[6], const float3 block[16])
 {
-    float4(1.0, 0.0, 0.0, 0.0),
-    float4(0.0, 1.0, 0.0, 0.0),
-    float4(0.0, 0.0, 1.0, 0.0),
-    float4(0.0, 0.0, 0.0, 1.0)
-};
-struct Globals_Type
+    int k;
+    float3 acc = 0;
+    for (k = 0; k < 16; ++k)
+        acc += block[k];
+    float3 dc = acc / 16;
+
+    float covar0 = 0;
+    float covar1 = 0;
+    float covar2 = 0;
+    float covar3 = 0;
+    float covar4 = 0;
+    float covar5 = 0;
+
+    for (k=0; k<16; k++)
+    {
+        float3 rgb;
+        rgb.r = block[k].r-dc.r;
+        rgb.g = block[k].g-dc.g;
+        rgb.b = block[k].b-dc.b;
+
+        covar0 += rgb.r*rgb.r;
+        covar1 += rgb.r*rgb.g;
+        covar2 += rgb.r*rgb.b;
+
+        covar3 += rgb.g*rgb.g;
+        covar4 += rgb.g*rgb.b;
+
+        covar5 += rgb.b*rgb.b;
+    }
+
+    covar[0] = covar0;
+    covar[1] = covar1;
+    covar[2] = covar2;
+    covar[3] = covar3;
+    covar[4] = covar4;
+    covar[5] = covar5;
+    return dc;
+}
+
+int stb__Mul8Bit(int a, int b)
+{
+  int t = a*b + 128;
+  return (t + (t >> 8)) >> 8;
+}
+
+uint stb__As16Bit(int r, int g, int b)
+{
+   return (stb__Mul8Bit(r,31) << 11) + (stb__Mul8Bit(g,63) << 5) + stb__Mul8Bit(b,31);
+}
+
+uint enc_rgb565(float3 c)
+{
+    return stb__As16Bit((int)c.r, (int)c.g, (int)c.b);
+}
+
+float3 dec_rgb565(int p)
+{
+    int c2 = (p>>0)&31;
+    int c1 = (p>>5)&63;
+    int c0 = (p>>11)&31;
+
+    float3 c;
+    c[0] = (c0<<3)+(c0>>2);
+    c[1] = (c1<<2)+(c1>>4);
+    c[2] = (c2<<3)+(c2>>2);
+    return c;
+}
+
+void swap_ints(thread int& u, thread int& v)
+{
+    int t = u;
+    u = v;
+    v = t;
+}
+
+float3 ssymv(const float covar[6], float3 b)
+{
+    float3 a;
+    a[0] = covar[0]*b[0]+covar[1]*b[1]+covar[2]*b[2];
+    a[1] = covar[1]*b[0]+covar[3]*b[1]+covar[4]*b[2];
+    a[2] = covar[2]*b[0]+covar[4]*b[1]+covar[5]*b[2];
+    return a;
+}
+
+void ssymv3(float a[4], const float covar[10], const float b[4])
+{
+    a[0] = covar[0]*b[0]+covar[1]*b[1]+covar[2]*b[2];
+    a[1] = covar[1]*b[0]+covar[4]*b[1]+covar[5]*b[2];
+    a[2] = covar[2]*b[0]+covar[5]*b[1]+covar[7]*b[2];
+    a[3] = 0;
+}
+
+void ssymv4(float a[4], const float covar[10], const float b[4])
+{
+    a[0] = covar[0]*b[0]+covar[1]*b[1]+covar[2]*b[2]+covar[3]*b[3];
+    a[1] = covar[1]*b[0]+covar[4]*b[1]+covar[5]*b[2]+covar[6]*b[3];
+    a[2] = covar[2]*b[0]+covar[5]*b[1]+covar[7]*b[2]+covar[8]*b[3];
+    a[3] = covar[3]*b[0]+covar[6]*b[1]+covar[8]*b[2]+covar[9]*b[3];
+}
+
+float3 compute_axis3(float covar[6], const uint powerIterations)
+{
+    float3 v = float3(1,1,1);
+    for (uint i=0; i<powerIterations; i++)
+    {
+        v = ssymv(covar, v);
+        if (i%2==1) // renormalize every other iteration
+            v = normalize(v);
+    }
+    return v;
+}
+
+void compute_axis(float axis[4], const float covar[10], uint powerIterations, int channels)
+{
+    float vecc[4] = {1,1,1,1};
+
+    for (uint i=0; i<powerIterations; i++)
+    {
+        if (channels == 3) ssymv3(axis, covar, vecc);
+        if (channels == 4) ssymv4(axis, covar, vecc);
+        vecc[0] = axis[0]; vecc[1] = axis[1]; vecc[2] = axis[2]; vecc[3] = axis[3];
+
+        if (i%2==1) // renormalize every other iteration
+        {
+            int p;
+            float norm_sq = 0;
+            for (p=0; p<channels; p++)
+                norm_sq += axis[p]*axis[p];
+
+            float rnorm = 1.0 / sqrt(norm_sq);
+            for (p=0; p<channels; p++) vecc[p] *= rnorm;
+        }
+    }
+
+    axis = vecc;
+}
+
+void pick_endpoints(thread float3& c0, thread float3& c1, const float3 block[16], float3 axis, float3 dc)
+{
+    float min_dot = 256*256;
+    float max_dot = 0;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        float dt = dot(block[i]-dc, axis);
+        min_dot = min(dt, min_dot);
+        max_dot = max(dt, max_dot);
+    }
+
+    if (max_dot-min_dot < 1)
+    {
+        min_dot -= 0.5f;
+        max_dot += 0.5f;
+    }
+
+    float norm_sq = dot(axis, axis);
+    float rnorm_sq = 1.0 / norm_sq;
+    c0 = clamp(dc+min_dot*rnorm_sq*axis, 0, 255);
+    c1 = clamp(dc+max_dot*rnorm_sq*axis, 0, 255);
+}
+
+uint fast_quant(float3 block[16], int p0, int p1)
+{
+    float3 c0 = dec_rgb565(p0);
+    float3 c1 = dec_rgb565(p1);
+
+    float3 dir = c1-c0;
+    float sq_norm = dot(dir, dir);
+    float rsq_norm = 1.0 / sq_norm;
+    dir *= rsq_norm*3;
+
+    float bias = 0.5;
+    for (int p=0; p<3; p++) bias -= c0[p]*dir[p];
+
+    uint bits = 0;
+    uint scaler = 1;
+    for (int k=0; k<16; k++)
+    {
+        float dt = dot(block[k], dir);
+        int q = clamp((int)(dt+bias), 0, 3);
+
+        //bits += q<<(k*2);
+        bits += q*scaler;
+        scaler *= 4;
+    }
+
+    return bits;
+}
+
+void bc1_refine(int pe[2], float3 block[16], uint bits, float3 dc)
+{
+    float3 c0;
+    float3 c1;
+
+    if ((bits ^ (bits*4)) < 4)
+    {
+        // single color
+        c0 = dc;
+        c1 = dc;
+    }
+    else
+    {
+        float3 Atb1 = float3(0,0,0);
+        float sum_q = 0;
+        float sum_qq = 0;
+        uint shifted_bits = bits;
+
+        for (int k=0; k<16; k++)
+        {
+            float q = (int)(shifted_bits&3);
+            shifted_bits >>= 2;
+
+            float x = 3-q;
+            float y = q;
+
+            sum_q += q;
+            sum_qq += q*q;
+
+            Atb1 += x*block[k];
+        }
+
+        float3 sum = dc*16;
+        float3 Atb2 = 3*sum-Atb1;
+
+        float Cxx = 16*3*3-2*3*sum_q+sum_qq;
+        float Cyy = sum_qq;
+        float Cxy = 3*sum_q-sum_qq;
+        float scale = 3 * (1.0 / (Cxx*Cyy - Cxy*Cxy));
+
+        c0 = (Atb1*Cyy - Atb2*Cxy)*scale;
+        c1 = (Atb2*Cxx - Atb1*Cxy)*scale;
+        c0 = clamp(c0, 0, 255);
+        c1 = clamp(c1, 0, 255);
+    }
+
+    pe[0] = enc_rgb565(c0);
+    pe[1] = enc_rgb565(c1);
+}
+
+uint fix_qbits(uint qbits)
+{
+    const uint mask_01b = 0x55555555;
+    const uint mask_10b = 0xAAAAAAAA;
+
+    uint qbits0 = qbits&mask_01b;
+    uint qbits1 = qbits&mask_10b;
+    qbits = (qbits1>>1) + (qbits1 ^ (qbits0<<1));
+
+    return qbits;
+}
+
+uint2 CompressBlockBC1_core(float3 block[16])
+{
+    const int powerIterations = 4;
+    const int refineIterations = 1;
+
+    float covar[6];
+    float3 dc = compute_covar_dc_ugly(covar, block);
+
+    float eps = 0.001;
+    covar[0] += eps;
+    covar[3] += eps;
+    covar[5] += eps;
+
+    float3 axis = compute_axis3(covar, powerIterations);
+
+    float3 c0;
+    float3 c1;
+    pick_endpoints(c0, c1, block, axis, dc);
+    
+    int p[2];
+    p[0] = enc_rgb565(c0);
+    p[1] = enc_rgb565(c1);
+    if (p[0]<p[1]) swap_ints(p[0], p[1]);
+
+    uint2 data;
+    data[0] = (1<<16)*p[1]+p[0];
+    data[1] = fast_quant(block, p[0], p[1]);
+
+    // refine
+    //[unroll]
+    for (int i=0; i<refineIterations; i++)
+    {
+        bc1_refine(p, block, data[1], dc);
+        if (p[0]<p[1]) swap_ints(p[0], p[1]);
+        data[0] = (1<<16)*p[1]+p[0];
+        data[1] = fast_quant(block, p[0], p[1]);
+    }
+
+    data[1] = fix_qbits(data[1]);
+    return data;
+}
+
+uint2 CompressBlockBC3_alpha(float block[16])
+{
+    uint k;
+    float ep[2] = {255, 0};
+
+    for (k=0; k<16; k++)
+    {
+        ep[0] = min(ep[0], block[k]);
+        ep[1] = max(ep[1], block[k]);
+    }
+
+    if (ep[0] == ep[1]) ep[1] = ep[0]+0.1f;
+
+    uint qblock[2] = {0, 0};
+    float scale = 7/(ep[1]-ep[0]);
+
+    for (k=0; k<16; k++)
+    {
+        float v = block[k];
+        float proj = (v-ep[0])*scale+0.5f;
+
+        int q = clamp((int)proj, 0, 7);
+
+        q = 7-q;
+
+        if (q > 0) q++;
+        if (q==8) q = 1;
+
+        qblock[k/8] |= q << ((k%8)*3);
+    }
+
+    // (could be improved by refinement)
+
+    uint2 data;
+    data[0] = clamp((int)ep[0], 0, 255)*256+clamp((int)ep[1], 0, 255);
+    data[0] |= qblock[0]<<16;
+    data[1] = qblock[0]>>16;
+    data[1] |= qblock[1]<<8;
+    return data;
+}
+
+struct Globals
 {
     uint inputOffset;
     uint outputOffset;
@@ -27,464 +352,42 @@ struct Globals_Type
     uint height_in_blocks;
 };
 
-struct bufInput_Type
+void LoadBlock(uint image_width, uint image_height, const device uint* bufInput, uint inputOffset, uint2 id, float3 pixels[16], float alphas[16])
 {
-    uint value[1];
-};
+    uint2 pixelCoordBase = id << 2;
+    for (int i = 0; i < 16; ++i)
+    {
+        uint2 pixelCoord = pixelCoordBase + uint2(i & 3, i >> 2);
+        pixelCoord = min(pixelCoord, uint2(image_width-1, image_height-1));
+        uint raw = bufInput[pixelCoord.y*image_width+pixelCoord.x+inputOffset];
+        float4 pix;
+        pix.r = (float)(raw & 0xFF);
+        pix.g = (float)((raw >> 8) & 0xFF);
+        pix.b = (float)((raw >> 16) & 0xFF);
+        pix.a = (float)(raw >> 24);
+        pixels[i] = pix.rgb;
+        alphas[i] = pix.a;
+    }
+}
 
-struct bufOutput_Type
-{
-    uint value[1];
-};
-
-template <typename UVecType> UVecType bitFieldInsert(const UVecType width, const UVecType offset, const UVecType src2, const UVecType src3)
-{
-    UVecType bitmask = (((UVecType(1) << width)-1) << offset) & 0xffffffff;
-    return ((src2 << offset) & bitmask) | (src3 & ~bitmask);
-};
-template <int N> vec<uint, N> bitFieldExtractU(const vec<uint, N> width, const vec<uint, N> offset, const vec<uint, N> src)
-{
-    vec<bool, N> isWidthZero = (width == 0);
-    vec<bool, N> needsClamp = ((width + offset) < 32);
-    vec<uint, N> clampVersion = src << (32-(width+offset));
-    clampVersion = clampVersion >> (32 - width);
-    vec<uint, N> simpleVersion = src >> offset;
-    vec<uint, N> res = select(simpleVersion, clampVersion, needsClamp);
-    return select(res, vec<uint, N>(0), isWidthZero);
-};
 kernel void computeMain(
-    constant Globals_Type& Globals [[ buffer(1) ]],
-    const device bufInput_Type *bufInput [[ buffer(2) ]],
-    device bufOutput_Type *bufOutput [[ buffer(0) ]],
-    uint3 mtl_ThreadID [[ thread_position_in_grid ]])
+    constant Globals& globals [[buffer(1)]],
+    const device uint* bufInput [[buffer(2)]],
+    device uint* bufOutput [[buffer(0)]],
+    uint3 id [[thread_position_in_grid]])
 {
-    bufInput = reinterpret_cast<const device bufInput_Type *> (reinterpret_cast<device const atomic_uint *> (bufInput) + 1);
-    bufOutput = reinterpret_cast<device bufOutput_Type *> (reinterpret_cast<device atomic_uint *> (bufOutput) + 1);
-    float3 u_xlat0;
-    int2 u_xlati0;
-    uint2 u_xlatu0;
-    bool2 u_xlatb0;
-    float3 u_xlat1;
-    int3 u_xlati1;
-    float3 u_xlat2;
-    int2 u_xlati2;
-    float3 u_xlat3;
-    float3 u_xlat4;
-    float3 u_xlat5;
-    float3 u_xlat6;
-    float3 u_xlat7;
-    float3 u_xlat8;
-    float3 u_xlat9;
-    float3 u_xlat10;
-    float3 u_xlat11;
-    float3 u_xlat12;
-    float3 u_xlat13;
-    float3 u_xlat14;
-    float3 u_xlat15;
-    float4 u_xlat16;
-    int3 u_xlati16;
-    float3 u_xlat17;
-    int3 u_xlati17;
-    float3 u_xlat18;
-    int3 u_xlati18;
-    float4 u_xlat19;
-    float3 u_xlat20;
-    float3 u_xlat21;
-    int u_xlati22;
-    uint u_xlatu22;
-    float u_xlat23;
-    int u_xlati23;
-    uint2 u_xlatu23;
-    bool u_xlatb23;
-    float3 u_xlat24;
-    int u_xlati24;
-    bool u_xlatb24;
-    int u_xlati44;
-    uint2 u_xlatu44;
-    int u_xlati45;
-    uint2 u_xlatu45;
-    float u_xlat46;
-    bool u_xlatb46;
-    float u_xlat66;
-    int u_xlati66;
-    uint u_xlatu66;
-    float u_xlat67;
-    int u_xlati67;
-    uint u_xlatu67;
-    bool u_xlatb67;
-    float u_xlat68;
-    int u_xlati68;
-    uint u_xlatu68;
-    bool u_xlatb68;
-    float u_xlat69;
-    int u_xlati69;
-    bool u_xlatb69;
-    float u_xlat70;
-    int u_xlati70;
-    uint u_xlatu70;
-    bool u_xlatb70;
-    float u_xlat71;
-    int u_xlati71;
-    float4 TempArray0[16];
-    float4 TempArray1[16];
-    float4 TempArray2[2];
-    float4 TempArray3[2];
-    float4 TempArray4[16];
-    float4 TempArray5[16];
-    float4 TempArray6[2];
-    float4 TempArray7[16];
-    u_xlatb0.xy = (mtl_ThreadID.xy>=uint2(Globals.width_in_blocks, Globals.height_in_blocks));
-    u_xlatb0.x = u_xlatb0.y || u_xlatb0.x;
-    if(u_xlatb0.x){
+    if (id.x >= globals.width_in_blocks || id.y >= globals.height_in_blocks)
         return;
-    }
-    u_xlati0.xy = int2(mtl_ThreadID.xy) << int2(0x2, 0x2);
-    u_xlatu44.xy = uint2(Globals.image_width, Globals.image_height) + uint2(0xffffffffu, 0xffffffffu);
-    u_xlati1.x = 0x0;
-    while(true){
-        u_xlatb23 = u_xlati1.x>=0x10;
-        if(u_xlatb23){break;}
-        u_xlati2.x = int(uint(u_xlati1.x) & 0x3u);
-        u_xlati2.y = u_xlati1.x >> 0x2;
-        u_xlatu23.xy = uint2(u_xlati0.xy) + uint2(u_xlati2.xy);
-        u_xlatu23.xy = min(u_xlatu44.xy, u_xlatu23.xy);
-        u_xlati23 = int(u_xlatu23.y) * int(Globals.image_width) + int(u_xlatu23.x);
-        u_xlati23 = u_xlati23 + int(Globals.inputOffset);
-        u_xlatu23.x = bufInput[u_xlati23].value[(0x0 >> 2) + 0];
-        u_xlatu45.x = u_xlatu23.x & 0xffu;
-        u_xlat2.x = float(u_xlatu45.x);
-        u_xlatu45.xy = bitFieldExtractU(uint2(0x8u, 0x8u), uint2(0x8u, 0x10u), u_xlatu23.xx);
-        u_xlat2.yz = float2(u_xlatu45.xy);
-        u_xlatu23.x = u_xlatu23.x >> 0x18u;
-        u_xlat23 = float(u_xlatu23.x);
-        TempArray0[u_xlati1.x].xyz = u_xlat2.xyz;
-        TempArray1[u_xlati1.x].x = u_xlat23;
-        u_xlati1.x = u_xlati1.x + 0x1;
-    }
-    u_xlat0.xyz = TempArray0[0].xyz;
-    u_xlat1.xyz = TempArray0[1].xyz;
-    u_xlat2.xyz = TempArray0[2].xyz;
-    u_xlat3.xyz = TempArray0[3].xyz;
-    u_xlat4.xyz = TempArray0[4].xyz;
-    u_xlat5.xyz = TempArray0[5].xyz;
-    u_xlat6.xyz = TempArray0[6].xyz;
-    u_xlat7.xyz = TempArray0[7].xyz;
-    u_xlat8.xyz = TempArray0[8].xyz;
-    u_xlat9.xyz = TempArray0[9].xyz;
-    u_xlat10.xyz = TempArray0[10].xyz;
-    u_xlat11.xyz = TempArray0[11].xyz;
-    u_xlat12.xyz = TempArray0[12].xyz;
-    u_xlat13.xyz = TempArray0[13].xyz;
-    u_xlat14.xyz = TempArray0[14].xyz;
-    u_xlat15.xyz = TempArray0[15].xyz;
-    TempArray2[0].x = 255.0;
-    TempArray2[1].x = 0.0;
-    u_xlatu66 = 0x0u;
-    while(true){
-        u_xlatb67 = u_xlatu66>=0x10u;
-        if(u_xlatb67){break;}
-        u_xlat67 = TempArray2[0].x;
-        u_xlat68 = TempArray1[int(u_xlatu66)].x;
-        u_xlat67 = min(u_xlat67, u_xlat68);
-        TempArray2[0].x = u_xlat67;
-        u_xlat67 = TempArray2[1].x;
-        u_xlat67 = max(u_xlat68, u_xlat67);
-        TempArray2[1].x = u_xlat67;
-        u_xlatu66 = u_xlatu66 + 0x1u;
-    }
-    u_xlat66 = TempArray2[0].x;
-    u_xlat67 = TempArray2[1].x;
-    u_xlatb67 = u_xlat66==u_xlat67;
-    if(u_xlatb67){
-        u_xlat66 = u_xlat66 + 0.100000001;
-        TempArray2[1].x = u_xlat66;
-    }
-    TempArray3[0].x = 0.0;
-    TempArray3[1].x = 0.0;
-    u_xlat66 = TempArray2[1].x;
-    u_xlat67 = TempArray2[0].x;
-    u_xlat66 = u_xlat66 + (-u_xlat67);
-    u_xlat66 = 7.0 / u_xlat66;
-    u_xlatu68 = 0x0u;
-    while(true){
-        u_xlatb69 = u_xlatu68>=0x10u;
-        if(u_xlatb69){break;}
-        u_xlat69 = TempArray1[int(u_xlatu68)].x;
-        u_xlat69 = (-u_xlat67) + u_xlat69;
-        u_xlat69 = fma(u_xlat69, u_xlat66, 0.5);
-        u_xlati69 = int(u_xlat69);
-        u_xlati69 = max(u_xlati69, 0x0);
-        u_xlati69 = min(u_xlati69, 0x7);
-        u_xlati70 = (-u_xlati69) + 0x7;
-        u_xlatb70 = 0x0<u_xlati70;
-        if(u_xlatb70){
-            u_xlati69 = (-u_xlati69) + 0x8;
-        } else {
-            u_xlati69 = 0x0;
-        }
-        u_xlatb70 = u_xlati69==0x8;
-        if(u_xlatb70){
-            u_xlati69 = 0x1;
-        }
-        u_xlatu70 = u_xlatu68 >> 0x3u;
-        u_xlati71 = int(u_xlatu68 & 0x7u);
-        u_xlati71 = u_xlati71 * 0x3;
-        u_xlati69 = u_xlati69 << u_xlati71;
-        u_xlat71 = TempArray3[int(u_xlatu70)].x;
-        u_xlat69 = as_type<float>(uint(u_xlati69) | as_type<uint>(u_xlat71));
-        TempArray3[int(u_xlatu70)].x = u_xlat69;
-        u_xlatu68 = u_xlatu68 + 0x1u;
-    }
-    u_xlat66 = TempArray2[0].x;
-    u_xlati66 = int(u_xlat66);
-    u_xlati66 = max(u_xlati66, 0x0);
-    u_xlati66 = min(u_xlati66, 0xff);
-    u_xlat67 = TempArray2[1].x;
-    u_xlati67 = int(u_xlat67);
-    u_xlati67 = max(u_xlati67, 0x0);
-    u_xlati67 = min(u_xlati67, 0xff);
-    u_xlati66 = u_xlati66 * 0x100 + u_xlati67;
-    u_xlat67 = TempArray3[0].x;
-    u_xlati66 = int(bitFieldInsert(0x10u, 0x10u, as_type<uint>(u_xlat67), uint(u_xlati66)));
-    u_xlatu67 = as_type<uint>(u_xlat67) >> 0x10u;
-    u_xlat68 = TempArray3[1].x;
-    u_xlati68 = as_type<int>(u_xlat68) << 0x8;
-    u_xlati67 = int(u_xlatu67 | uint(u_xlati68));
-    TempArray4[0].xyz = u_xlat0.xyz;
-    TempArray4[1].xyz = u_xlat1.xyz;
-    TempArray4[2].xyz = u_xlat2.xyz;
-    TempArray4[3].xyz = u_xlat3.xyz;
-    TempArray4[4].xyz = u_xlat4.xyz;
-    TempArray4[5].xyz = u_xlat5.xyz;
-    TempArray4[6].xyz = u_xlat6.xyz;
-    TempArray4[7].xyz = u_xlat7.xyz;
-    TempArray4[8].xyz = u_xlat8.xyz;
-    TempArray4[9].xyz = u_xlat9.xyz;
-    TempArray4[10].xyz = u_xlat10.xyz;
-    TempArray4[11].xyz = u_xlat11.xyz;
-    TempArray4[12].xyz = u_xlat12.xyz;
-    TempArray4[13].xyz = u_xlat13.xyz;
-    TempArray4[14].xyz = u_xlat14.xyz;
-    TempArray4[15].xyz = u_xlat15.xyz;
-    u_xlat16.x = float(0.0);
-    u_xlat16.y = float(0.0);
-    u_xlat16.z = float(0.0);
-    u_xlati68 = 0x0;
-    while(true){
-        u_xlatb69 = u_xlati68>=0x10;
-        if(u_xlatb69){break;}
-        u_xlat17.xyz = TempArray4[u_xlati68].xyz;
-        u_xlat16.xyz = u_xlat16.xyz + u_xlat17.xyz;
-        u_xlati68 = u_xlati68 + 0x1;
-    }
-    u_xlat17.xyz = u_xlat16.xyz * float3(0.0625, 0.0625, 0.0625);
-    u_xlat18.x = float(0.0);
-    u_xlat18.y = float(0.0);
-    u_xlat18.z = float(0.0);
-    u_xlat19.x = float(0.0);
-    u_xlat19.y = float(0.0);
-    u_xlat19.z = float(0.0);
-    u_xlati68 = 0x0;
-    while(true){
-        u_xlatb69 = u_xlati68>=0x10;
-        if(u_xlatb69){break;}
-        u_xlat69 = TempArray4[u_xlati68].x;
-        u_xlat69 = fma((-u_xlat16.x), 0.0625, u_xlat69);
-        u_xlat70 = TempArray4[u_xlati68].y;
-        u_xlat70 = fma((-u_xlat16.y), 0.0625, u_xlat70);
-        u_xlat71 = TempArray4[u_xlati68].z;
-        u_xlat71 = fma((-u_xlat16.z), 0.0625, u_xlat71);
-        u_xlat18.x = fma(u_xlat69, u_xlat69, u_xlat18.x);
-        u_xlat19.x = fma(u_xlat69, u_xlat70, u_xlat19.x);
-        u_xlat19.y = fma(u_xlat69, u_xlat71, u_xlat19.y);
-        u_xlat18.y = fma(u_xlat70, u_xlat70, u_xlat18.y);
-        u_xlat19.z = fma(u_xlat70, u_xlat71, u_xlat19.z);
-        u_xlat18.z = fma(u_xlat71, u_xlat71, u_xlat18.z);
-        u_xlati68 = u_xlati68 + 0x1;
-    }
-    u_xlat19 = u_xlat19.xyxz;
-    u_xlat18.xyz = u_xlat18.xyz + float3(0.00100000005, 0.00100000005, 0.00100000005);
-    u_xlat20.x = float(1.0);
-    u_xlat20.y = float(1.0);
-    u_xlat20.z = float(1.0);
-    u_xlatu68 = 0x0u;
-    while(true){
-        u_xlatb69 = u_xlatu68>=0x4u;
-        if(u_xlatb69){break;}
-        u_xlat21.xy = u_xlat19.xz * u_xlat20.yx;
-        u_xlat21.xy = fma(u_xlat18.xy, u_xlat20.xy, u_xlat21.xy);
-        u_xlat21.xy = fma(u_xlat19.yw, u_xlat20.zz, u_xlat21.xy);
-        u_xlat69 = dot(u_xlat19.yw, u_xlat20.xy);
-        u_xlat21.z = fma(u_xlat18.z, u_xlat20.z, u_xlat69);
-        u_xlati69 = int(u_xlatu68 & 0x1u);
-        u_xlatb69 = u_xlati69==0x1;
-        if(u_xlatb69){
-            u_xlat69 = dot(u_xlat21.xyz, u_xlat21.xyz);
-            u_xlat69 = rsqrt(u_xlat69);
-            u_xlat20.xyz = float3(u_xlat69) * u_xlat21.xyz;
-        } else {
-            u_xlat20.xyz = u_xlat21.xyz;
-        }
-        u_xlatu68 = u_xlatu68 + 0x1u;
-    }
-    TempArray5[0].xyz = u_xlat0.xyz;
-    TempArray5[1].xyz = u_xlat1.xyz;
-    TempArray5[2].xyz = u_xlat2.xyz;
-    TempArray5[3].xyz = u_xlat3.xyz;
-    TempArray5[4].xyz = u_xlat4.xyz;
-    TempArray5[5].xyz = u_xlat5.xyz;
-    TempArray5[6].xyz = u_xlat6.xyz;
-    TempArray5[7].xyz = u_xlat7.xyz;
-    TempArray5[8].xyz = u_xlat8.xyz;
-    TempArray5[9].xyz = u_xlat9.xyz;
-    TempArray5[10].xyz = u_xlat10.xyz;
-    TempArray5[11].xyz = u_xlat11.xyz;
-    TempArray5[12].xyz = u_xlat12.xyz;
-    TempArray5[13].xyz = u_xlat13.xyz;
-    TempArray5[14].xyz = u_xlat14.xyz;
-    TempArray5[15].xyz = u_xlat15.xyz;
-    u_xlat18.x = float(65536.0);
-    u_xlat18.y = float(0.0);
-    u_xlati68 = 0x0;
-    while(true){
-        u_xlatb69 = u_xlati68>=0x10;
-        if(u_xlatb69){break;}
-        u_xlat19.xyz = TempArray5[u_xlati68].xyz;
-        u_xlat19.xyz = fma((-u_xlat16.xyz), float3(0.0625, 0.0625, 0.0625), u_xlat19.xyz);
-        u_xlat69 = dot(u_xlat19.xyz, u_xlat20.xyz);
-        u_xlat18.x = min(u_xlat18.x, u_xlat69);
-        u_xlat18.y = max(u_xlat18.y, u_xlat69);
-        u_xlati68 = u_xlati68 + 0x1;
-    }
-    u_xlat68 = (-u_xlat18.x) + u_xlat18.y;
-    u_xlatb68 = u_xlat68<1.0;
-    if(u_xlatb68){
-        u_xlat18.xy = u_xlat18.xy + float2(-0.5, 0.5);
-    }
-    u_xlat68 = dot(u_xlat20.xyz, u_xlat20.xyz);
-    u_xlat68 = float(1.0) / float(u_xlat68);
-    u_xlat16.xy = float2(u_xlat68) * u_xlat18.xy;
-    u_xlat16.xzw = fma(u_xlat16.xxx, u_xlat20.xyz, u_xlat17.xyz);
-    u_xlat16.xzw = max(u_xlat16.xzw, float3(0.0, 0.0, 0.0));
-    u_xlat16.xzw = min(u_xlat16.xzw, float3(255.0, 255.0, 255.0));
-    u_xlat17.xyz = fma(u_xlat16.yyy, u_xlat20.xyz, u_xlat17.xyz);
-    u_xlat17.xyz = max(u_xlat17.xyz, float3(0.0, 0.0, 0.0));
-    u_xlat17.xyz = min(u_xlat17.xyz, float3(255.0, 255.0, 255.0));
-    u_xlati16.xyz = int3(u_xlat16.xzw);
-    u_xlati16.xyz = u_xlati16.xyz * int3(0x1f, 0x3f, 0x1f) + int3(0x80, 0x80, 0x80);
-    u_xlati18.xyz = u_xlati16.xyz >> int3(0x8, 0x8, 0x8);
-    u_xlati16.xyz = u_xlati16.xyz + u_xlati18.xyz;
-    u_xlati16.xyz = u_xlati16.xyz >> int3(0x8, 0x8, 0x8);
-    u_xlati68 = u_xlati16.y << 0x5;
-    u_xlati68 = u_xlati16.x * 0x800 + u_xlati68;
-    u_xlat68 = as_type<float>(u_xlati68 + u_xlati16.z);
-    TempArray6[0].x = u_xlat68;
-    u_xlati16.xyz = int3(u_xlat17.xyz);
-    u_xlati16.xyz = u_xlati16.xyz * int3(0x1f, 0x3f, 0x1f) + int3(0x80, 0x80, 0x80);
-    u_xlati17.xyz = u_xlati16.xyz >> int3(0x8, 0x8, 0x8);
-    u_xlati16.xyz = u_xlati16.xyz + u_xlati17.xyz;
-    u_xlati16.xyz = u_xlati16.xyz >> int3(0x8, 0x8, 0x8);
-    u_xlati69 = u_xlati16.y << 0x5;
-    u_xlati69 = u_xlati16.x * 0x800 + u_xlati69;
-    u_xlat69 = as_type<float>(u_xlati69 + u_xlati16.z);
-    TempArray6[1].x = u_xlat69;
-    u_xlatb70 = as_type<int>(u_xlat68)<as_type<int>(u_xlat69);
-    if(u_xlatb70){
-        TempArray6[0].x = u_xlat69;
-        TempArray6[1].x = u_xlat68;
-    }
-    u_xlat68 = TempArray6[1].x;
-    u_xlat69 = TempArray6[0].x;
-    u_xlatb70 = as_type<int>(u_xlat69)<as_type<int>(u_xlat68);
-    if(u_xlatb70){
-        TempArray6[0].x = u_xlat68;
-        TempArray6[1].x = u_xlat69;
-    }
-    u_xlat68 = TempArray6[1].x;
-    u_xlat69 = TempArray6[0].x;
-    u_xlati70 = as_type<int>(u_xlat68) * 0x10000 + as_type<int>(u_xlat69);
-    TempArray7[0].xyz = u_xlat0.xyz;
-    TempArray7[1].xyz = u_xlat1.xyz;
-    TempArray7[2].xyz = u_xlat2.xyz;
-    TempArray7[3].xyz = u_xlat3.xyz;
-    TempArray7[4].xyz = u_xlat4.xyz;
-    TempArray7[5].xyz = u_xlat5.xyz;
-    TempArray7[6].xyz = u_xlat6.xyz;
-    TempArray7[7].xyz = u_xlat7.xyz;
-    TempArray7[8].xyz = u_xlat8.xyz;
-    TempArray7[9].xyz = u_xlat9.xyz;
-    TempArray7[10].xyz = u_xlat10.xyz;
-    TempArray7[11].xyz = u_xlat11.xyz;
-    TempArray7[12].xyz = u_xlat12.xyz;
-    TempArray7[13].xyz = u_xlat13.xyz;
-    TempArray7[14].xyz = u_xlat14.xyz;
-    TempArray7[15].xyz = u_xlat15.xyz;
-    u_xlatu0.xy = bitFieldExtractU(uint2(0x6u, 0x3u), uint2(0x5u, 0x2u), as_type<uint2>(float2(u_xlat69)));
-    u_xlati44 = as_type<int>(u_xlat69) >> 0xb;
-    u_xlati1.x = u_xlati44 >> 0x2;
-    u_xlati44 = u_xlati44 * 0x8 + u_xlati1.x;
-    u_xlat1.x = float(u_xlati44);
-    u_xlati44 = int(u_xlatu0.x) >> 0x4;
-    u_xlati0.x = int(u_xlatu0.x) * 0x4 + u_xlati44;
-    u_xlat1.y = float(u_xlati0.x);
-    u_xlati0.x = int(bitFieldInsert(0x5u, 0x3u, as_type<uint>(u_xlat69), 0x0u));
-    u_xlati0.x = u_xlati0.x + int(u_xlatu0.y);
-    u_xlat1.z = float(u_xlati0.x);
-    u_xlatu0.xy = bitFieldExtractU(uint2(0x6u, 0x3u), uint2(0x5u, 0x2u), as_type<uint2>(float2(u_xlat68)));
-    u_xlati44 = as_type<int>(u_xlat68) >> 0xb;
-    u_xlati2.x = u_xlati44 >> 0x2;
-    u_xlati44 = u_xlati44 * 0x8 + u_xlati2.x;
-    u_xlat2.x = float(u_xlati44);
-    u_xlati44 = int(u_xlatu0.x) >> 0x4;
-    u_xlati0.x = int(u_xlatu0.x) * 0x4 + u_xlati44;
-    u_xlat2.y = float(u_xlati0.x);
-    u_xlati0.x = int(bitFieldInsert(0x5u, 0x3u, as_type<uint>(u_xlat68), 0x0u));
-    u_xlati0.x = u_xlati0.x + int(u_xlatu0.y);
-    u_xlat2.z = float(u_xlati0.x);
-    u_xlat0.xyz = (-u_xlat1.xyz) + u_xlat2.xyz;
-    u_xlat2.x = dot(u_xlat0.xyz, u_xlat0.xyz);
-    u_xlat2.x = float(1.0) / float(u_xlat2.x);
-    u_xlat2.x = u_xlat2.x * 3.0;
-    u_xlat0.xyz = u_xlat0.xyz * u_xlat2.xxx;
-    u_xlat2.x = float(0.5);
-    u_xlati24 = int(0x0);
-    while(true){
-        u_xlatb46 = u_xlati24>=0x3;
-        if(u_xlatb46){break;}
-        u_xlat46 = dot(u_xlat1.xyz, ImmCB_0[u_xlati24].xyz);
-        u_xlat68 = dot(u_xlat0.xyz, ImmCB_0[u_xlati24].xyz);
-        u_xlat2.x = fma((-u_xlat46), u_xlat68, u_xlat2.x);
-        u_xlati24 = u_xlati24 + 0x1;
-    }
-    u_xlati1.x = int(0x0);
-    u_xlati23 = int(0x1);
-    u_xlati45 = int(0x0);
-    while(true){
-        u_xlatb24 = u_xlati45>=0x10;
-        if(u_xlatb24){break;}
-        u_xlat24.xyz = TempArray7[u_xlati45].xyz;
-        u_xlat24.x = dot(u_xlat24.xyz, u_xlat0.xyz);
-        u_xlat24.x = u_xlat2.x + u_xlat24.x;
-        u_xlati24 = int(u_xlat24.x);
-        u_xlati24 = max(u_xlati24, 0x0);
-        u_xlati24 = min(u_xlati24, 0x3);
-        u_xlati1.x = u_xlati24 * u_xlati23 + u_xlati1.x;
-        u_xlati23 = u_xlati23 << 0x2;
-        u_xlati45 = u_xlati45 + 0x1;
-    }
-    u_xlatu0.x = uint(u_xlati1.x) & 0xaaaaaaaau;
-    u_xlatu22 = u_xlatu0.x >> 0x1u;
-    u_xlati44 = u_xlati1.x << 0x1;
-    u_xlati44 = int(uint(u_xlati44) & 0xaaaaaaaau);
-    u_xlati0.x = int(uint(u_xlati44) ^ u_xlatu0.x);
-    u_xlati0.x = u_xlati0.x + int(u_xlatu22);
-    u_xlati22 = int(mtl_ThreadID.y) * int(Globals.width_in_blocks) + int(mtl_ThreadID.x);
-    u_xlati22 = u_xlati22 << 0x2;
-    u_xlati22 = u_xlati22 + int(Globals.outputOffset);
-    bufOutput[u_xlati22].value[(0x0 >> 2)] = uint(u_xlati66);
-    u_xlati1.xyz = int3(u_xlati22) + int3(0x1, 0x2, 0x3);
-    bufOutput[u_xlati1.x].value[(0x0 >> 2)] = uint(u_xlati67);
-    bufOutput[u_xlati1.y].value[(0x0 >> 2)] = uint(u_xlati70);
-    bufOutput[u_xlati1.z].value[(0x0 >> 2)] = uint(u_xlati0.x);
-    return;
+
+    float3 pixels[16];
+    float alphas[16];
+    LoadBlock(globals.image_width, globals.image_height, bufInput, globals.inputOffset, id.xy, pixels, alphas);
+
+    uint2 resA = CompressBlockBC3_alpha(alphas);
+    uint2 res = CompressBlockBC1_core(pixels);
+    uint bufIdx = (id.y * globals.width_in_blocks + id.x) * 4 + globals.outputOffset;
+    bufOutput[bufIdx + 0] = resA.x;
+    bufOutput[bufIdx + 1] = resA.y;
+    bufOutput[bufIdx + 2] = res.x;
+    bufOutput[bufIdx + 3] = res.y;
 }
