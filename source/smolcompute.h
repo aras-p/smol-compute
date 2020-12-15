@@ -401,7 +401,7 @@ struct SmolKernel
 SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
 {
     MTLCompileOptions* opt = [MTLCompileOptions new];
-    opt.fastMathEnabled = true; //@TODO
+    opt.fastMathEnabled = false;
 
     NSString* srcStr = [[NSString alloc] initWithBytes: shaderCode length: shaderCodeSize encoding: NSASCIIStringEncoding];
 
