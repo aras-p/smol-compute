@@ -4,3 +4,4 @@ build
 projects/vs2019/.vs
 tests/**/*_exp.tga
 tests/**/*_got.tga
+.DS_Store

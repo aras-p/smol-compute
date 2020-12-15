@@ -10,6 +10,7 @@
 		2B0840FD24A665BF00F000EE /* smolcompute_impl.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2B0840FC24A665BF00F000EE /* smolcompute_impl.mm */; };
 		2B0840FF24A6669700F000EE /* tests.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2B0840FE24A6669700F000EE /* tests.cpp */; };
 		2B08410224A666FD00F000EE /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2B08410124A666FD00F000EE /* Metal.framework */; };
+		2B2353432588BBAE00C47578 /* externals_impl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2B2353422588BBAE00C47578 /* externals_impl.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -30,6 +31,7 @@
 		2B0840FC24A665BF00F000EE /* smolcompute_impl.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = smolcompute_impl.mm; path = tests/code/smolcompute_impl.mm; sourceTree = "<group>"; };
 		2B0840FE24A6669700F000EE /* tests.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = tests.cpp; path = tests/code/tests.cpp; sourceTree = "<group>"; };
 		2B08410124A666FD00F000EE /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		2B2353422588BBAE00C47578 /* externals_impl.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = externals_impl.cpp; path = tests/code/externals_impl.cpp; sourceTree = "<group>"; };
 		2B3E6B9D24A7C26400A9E1C9 /* sokol_time.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = sokol_time.h; path = tests/code/external/sokol_time.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -68,6 +70,7 @@
 				2B0840FB24A665AC00F000EE /* smolcompute.h */,
 				2B0840FC24A665BF00F000EE /* smolcompute_impl.mm */,
 				2B0840FE24A6669700F000EE /* tests.cpp */,
+				2B2353422588BBAE00C47578 /* externals_impl.cpp */,
 				2B3E6B9D24A7C26400A9E1C9 /* sokol_time.h */,
 			);
 			name = smolcompute;
@@ -140,6 +143,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B0840FD24A665BF00F000EE /* smolcompute_impl.mm in Sources */,
+				2B2353432588BBAE00C47578 /* externals_impl.cpp in Sources */,
 				2B0840FF24A6669700F000EE /* tests.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
