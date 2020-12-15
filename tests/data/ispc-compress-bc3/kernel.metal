@@ -110,7 +110,7 @@ void ssymv4(float a[4], const float covar[10], const float b[4])
 
 float3 compute_axis3(float covar[6], const uint powerIterations)
 {
-    float3 v = float3(1,1,1);
+    float3 v = float3(1.0f, 2.718281828f, 3.141592654f);
     for (uint i=0; i<powerIterations; i++)
     {
         v = ssymv(covar, v);
