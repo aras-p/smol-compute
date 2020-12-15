@@ -103,9 +103,10 @@ void ssymv4(out float a[4], float covar[10], float b[4])
     a[3] = covar[3]*b[0]+covar[6]*b[1]+covar[8]*b[2]+covar[9]*b[3];
 }
 
+
 float3 compute_axis3(float covar[6], const uint powerIterations)
 {
-    float3 v = float3(1,1,1);
+    float3 v = float3(1.0f, 2.718281828f, 3.141592654f);
     for (uint i=0; i<powerIterations; i++)
     {
         v = ssymv(covar, v);
@@ -113,31 +114,6 @@ float3 compute_axis3(float covar[6], const uint powerIterations)
             v = normalize(v);
     }
     return v;
-}
-
-void compute_axis(out float axis[4], float covar[10], uint powerIterations, int channels)
-{
-    float vec[4] = {1,1,1,1};
-
-    for (uint i=0; i<powerIterations; i++)
-    {
-        if (channels == 3) ssymv3(axis, covar, vec);
-        if (channels == 4) ssymv4(axis, covar, vec);
-        vec = axis;
-
-        if (i%2==1) // renormalize every other iteration
-        {
-            int p;
-            float norm_sq = 0;
-            for (p=0; p<channels; p++)
-                norm_sq += axis[p]*axis[p];
-
-            float rnorm = 1.0 / sqrt(norm_sq);
-            for (p=0; p<channels; p++) vec[p] *= rnorm;
-        }
-    }
-
-    axis = vec;
 }
 
 void pick_endpoints(out float3 c0, out float3 c1, float3 block[16], float3 axis, float3 dc)
@@ -192,7 +168,7 @@ uint fast_quant(float3 block[16], int p0, int p1)
     return bits;
 }
 
-void bc1_refine(int pe[2], float3 block[16], uint bits, float3 dc)
+void bc1_refine(inout int pe[2], float3 block[16], uint bits, float3 dc)
 {
     float3 c0;
     float3 c1;

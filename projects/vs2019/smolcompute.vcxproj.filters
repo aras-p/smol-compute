@@ -19,6 +19,7 @@
     <ClCompile Include="..\..\tests\code\smolcompute_impl_d3d11.cpp" />
     <ClCompile Include="..\..\tests\code\tests.cpp" />
     <ClCompile Include="..\..\tests\code\externals_impl.cpp" />
+    <ClCompile Include="..\..\tests\code\tests-ispc-compress-bc3.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="external">
