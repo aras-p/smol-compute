@@ -120,31 +120,6 @@ float3 compute_axis3(float covar[6], const uint powerIterations)
     return v;
 }
 
-void compute_axis(float axis[4], const float covar[10], uint powerIterations, int channels)
-{
-    float vecc[4] = {1,1,1,1};
-
-    for (uint i=0; i<powerIterations; i++)
-    {
-        if (channels == 3) ssymv3(axis, covar, vecc);
-        if (channels == 4) ssymv4(axis, covar, vecc);
-        vecc[0] = axis[0]; vecc[1] = axis[1]; vecc[2] = axis[2]; vecc[3] = axis[3];
-
-        if (i%2==1) // renormalize every other iteration
-        {
-            int p;
-            float norm_sq = 0;
-            for (p=0; p<channels; p++)
-                norm_sq += axis[p]*axis[p];
-
-            float rnorm = 1.0 / sqrt(norm_sq);
-            for (p=0; p<channels; p++) vecc[p] *= rnorm;
-        }
-    }
-
-    axis = vecc;
-}
-
 void pick_endpoints(thread float3& c0, thread float3& c1, const float3 block[16], float3 axis, float3 dc)
 {
     float min_dot = 256*256;
