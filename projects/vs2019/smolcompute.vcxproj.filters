@@ -20,4 +20,7 @@
       <UniqueIdentifier>{3b5ff9c4-0f70-4c3e-9d23-989941f43e66}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\readme.md" />
+  </ItemGroup>
 </Project>

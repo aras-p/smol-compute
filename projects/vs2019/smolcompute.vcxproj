@@ -21,6 +21,9 @@
     <ClCompile Include="..\..\tests\code\tests-ispc-compress-bc3.cpp" />
     <ClCompile Include="..\..\tests\code\tests.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\readme.md" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <ProjectGuid>{9D9ADA6B-655F-448B-9410-3C55DFCA077F}</ProjectGuid>
