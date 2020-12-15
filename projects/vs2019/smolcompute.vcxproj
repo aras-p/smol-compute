@@ -12,10 +12,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\source\smolcompute.h" />
-    <ClInclude Include="..\..\tests\code\external\rgbcx.h" />
     <ClInclude Include="..\..\tests\code\external\sokol_time.h" />
     <ClInclude Include="..\..\tests\code\external\stb_image.h" />
-    <ClInclude Include="..\..\tests\code\external\stb_image_write.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\tests\code\externals_impl.cpp" />

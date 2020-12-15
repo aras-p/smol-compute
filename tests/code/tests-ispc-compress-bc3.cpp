@@ -1,12 +1,12 @@
 #include "../../source/smolcompute.h"
+#include <algorithm>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "external/sokol_time.h"
 #include "external/stb_image.h"
-#include "external/stb_image_write.h"
-#include "external/rgbcx.h"
 
 // ----------------------------------------------------------------------------
 
@@ -158,9 +158,9 @@ static float3 dec_rgb565(int p)
     int c0 = (p>>11)&31;
 
     float3 c;
-    c.r = (c0<<3)+(c0>>2);
-    c.g = (c1<<2)+(c1>>4);
-    c.b = (c2<<3)+(c2>>2);
+    c.r = float((c0<<3)+(c0>>2));
+    c.g = float((c1<<2)+(c1>>4));
+    c.b = float((c2<<3)+(c2>>2));
     return c;
 }
 
@@ -225,7 +225,7 @@ static void compute_axis(float axis[4], const float covar[10], uint powerIterati
             for (p=0; p<channels; p++)
                 norm_sq += axis[p]*axis[p];
 
-            float rnorm = 1.0 / sqrt(norm_sq);
+            float rnorm = 1.0f / sqrtf(norm_sq);
             for (p=0; p<channels; p++) vecc[p] *= rnorm;
         }
     }
@@ -252,7 +252,7 @@ static void pick_endpoints(float3& c0, float3& c1, const float3 block[16], float
     }
 
     float norm_sq = dot(axis, axis);
-    float rnorm_sq = 1.0 / norm_sq;
+    float rnorm_sq = 1.0f / norm_sq;
     c0 = clamp(dc+min_dot*rnorm_sq*axis, 0, 255);
     c1 = clamp(dc+max_dot*rnorm_sq*axis, 0, 255);
 }
@@ -264,7 +264,7 @@ static uint fast_quant(float3 block[16], int p0, int p1)
 
     float3 dir = c1-c0;
     float sq_norm = dot(dir, dir);
-    float rsq_norm = 1.0 / sq_norm;
+    float rsq_norm = 1.0f / sq_norm;
     dir *= rsq_norm*3;
 
     float bias = 0.5;
@@ -305,7 +305,7 @@ static void bc1_refine(int pe[2], float3 block[16], uint bits, float3 dc)
 
         for (int k=0; k<16; k++)
         {
-            float q = (int)(shifted_bits&3);
+            float q = (float)(shifted_bits&3);
             shifted_bits >>= 2;
 
             float x = 3-q;
@@ -323,7 +323,7 @@ static void bc1_refine(int pe[2], float3 block[16], uint bits, float3 dc)
         float Cxx = 16*3*3-2*3*sum_q+sum_qq;
         float Cyy = sum_qq;
         float Cxy = 3*sum_q-sum_qq;
-        float scale = 3 * (1.0 / (Cxx*Cyy - Cxy*Cxy));
+        float scale = 3 * (1.0f / (Cxx*Cyy - Cxy*Cxy));
 
         c0 = (Atb1*Cyy - Atb2*Cxy)*scale;
         c1 = (Atb2*Cxx - Atb1*Cxy)*scale;
@@ -355,7 +355,7 @@ static uint2 CompressBlockBC1_core(float3 block[16])
     float covar[6];
     float3 dc = compute_covar_dc_ugly(covar, block);
 
-    float eps = 0.001;
+    float eps = 0.001f;
     covar[0] += eps;
     covar[3] += eps;
     covar[5] += eps;
@@ -505,55 +505,8 @@ static void* ReadFile(const char* path, size_t* outSize)
     return buffer;
 }
 
-
-static void store_block_4x4(unsigned char block[16 * 4], int x, int y, int width, int height, unsigned char* rgba)
-{
-    int storeX = (x + 4 > width) ? width - x : 4;
-    int storeY = (y + 4 > height) ? height - y : 4;
-    for (int row = 0; row < storeY; ++row)
-    {
-        unsigned char* dst = rgba + (y + row) * width * 4 + x * 4;
-        memcpy(dst, block + row * 4 * 4, storeX * 4);
-    }
-}
-
-static void decompress_dxtc(int width, int height, bool alpha, const unsigned char* input, unsigned char* rgba)
-{
-    int blocksX = (width + 3) / 4;
-    int blocksY = (height + 3) / 4;
-    for (int by = 0; by < blocksY; ++by)
-    {
-        for (int bx = 0; bx < blocksX; ++bx)
-        {
-            unsigned char block[16 * 4];
-            if (alpha)
-            {
-                rgbcx::unpack_bc3(input, block);
-                input += 16;
-            }
-            else
-            {
-                rgbcx::unpack_bc1(input, block, true);
-                input += 8;
-            }
-            store_block_4x4(block, bx * 4, by * 4, width, height, rgba);
-        }
-    }
-}
-
-static void save_bc3_result_image(const char* fn, int width, int height, const void* data)
-{
-    unsigned char* rgba = new unsigned char[width * height * 4];
-    decompress_dxtc(width, height, true, (const unsigned char*)data, rgba);
-    stbi_flip_vertically_on_write(1);
-    stbi_write_tga(fn, width, height, 4, rgba);
-    delete[] rgba;
-}
-
-
 bool IspcCompressBC3Test()
 {
-    rgbcx::init();
     bool ok = false;
 
     const int kGroupSize = 8;
@@ -637,14 +590,14 @@ bool IspcCompressBC3Test()
     
     // CPU eval test
     /*
-    for (int by = 0; by < glob.height_in_blocks; ++by)
+    for (uint by = 0; by < glob.height_in_blocks; ++by)
     {
-        for (int bx = 0; bx < glob.width_in_blocks; ++bx)
+        for (uint bx = 0; bx < glob.width_in_blocks; ++bx)
         {
             computeMain(glob, (const uint*)inputImage, (uint*)outputData, uint2(bx, by));
         }
     }
-     */
+    */
 
     if (memcmp(outputData, outputDataExpected, outputSize) != 0)
     {
@@ -662,11 +615,6 @@ bool IspcCompressBC3Test()
             }
         }
         printf("  %i words mismatch\n", printed);
-        const char* expTga = "tests/data/ispc-compress-bc3/16x16_exp.tga";
-        const char* gotTga = "tests/data/ispc-compress-bc3/16x16_got.tga";
-        save_bc3_result_image(expTga, inputWidth, inputHeight, outputDataExpected);
-        save_bc3_result_image(gotTga, inputWidth, inputHeight, outputData);
-        printf("  images written to %s and %s\n", expTga, gotTga);
         goto _cleanup;
     }
     
