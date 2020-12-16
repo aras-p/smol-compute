@@ -44,28 +44,22 @@ void SmolComputeDelete();
 // Data buffers: create, delete, set and get data.
 // - All sizes are in bytes.
 // - structElementSize is for structured buffers, some APIs need to know that.
-// - If a GPU writes into some buffer and you want to do GetData on it,
-//   call MakeGpuDataVisibleToCpu once before doing the call. Some APIs require
-//   explicit synchronization before reading the data.
 
 SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize = 0);
 void SmolBufferDelete(SmolBuffer* buffer);
 void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t dstOffset = 0);
 void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset = 0);
-void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer);
 
 
 // Computation kernels: create, delete, set them up (Set + SetBuffer), dispatch and wait
 // for dispatches to complete.
 // - Dispatch is number of "threads" launched, not number of "thread groups".
-// - Some APIs require a call FinishWork before reading data back to CPU.
 
 SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
 void SmolKernelDelete(SmolKernel* kernel);
 void SmolKernelSet(SmolKernel* kernel);
 void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding = SmolBufferBinding::Input);
 void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
-void SmolFinishWork();
 
 void SmolStartCapture();
 void SmolFinishCapture();
@@ -115,7 +109,6 @@ bool SmolComputeCreate()
 
 void SmolComputeDelete()
 {
-    SmolFinishWork();
     SMOL_RELEASE(s_D3D11Context);
     SMOL_RELEASE(s_D3D11Device);
 }
@@ -222,10 +215,6 @@ void SmolBufferDelete(SmolBuffer* buffer)
     delete buffer;
 }
 
-void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer)
-{
-}
-
 struct SmolKernel
 {
     ID3D11ComputeShader* kernel;
@@ -324,10 +313,6 @@ void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX
     s_D3D11Context->Dispatch(groupsX, groupsY, groupsZ);
 }
 
-void SmolFinishWork()
-{
-}
-
 #endif // #if SMOL_COMPUTE_D3D11
 
 
@@ -346,6 +331,25 @@ static id<MTLCommandQueue> s_MetalCmdQueue;
 static id<MTLCommandBuffer> s_MetalCmdBuffer;
 static id<MTLComputeCommandEncoder> s_MetalComputeEncoder;
 
+static void MetalFlushActiveEncoders()
+{
+    if (s_MetalComputeEncoder != nil)
+    {
+        [s_MetalComputeEncoder endEncoding];
+        s_MetalComputeEncoder = nil;
+    }
+}
+
+static void MetalFinishWork()
+{
+    if (s_MetalCmdBuffer == nil)
+        return;
+    MetalFlushActiveEncoders();
+    [s_MetalCmdBuffer commit];
+    [s_MetalCmdBuffer waitUntilCompleted];
+    s_MetalCmdBuffer = nil;
+}
+
 bool SmolComputeCreate()
 {
     s_MetalDevice = MTLCreateSystemDefaultDevice();
@@ -355,7 +359,7 @@ bool SmolComputeCreate()
 
 void SmolComputeDelete()
 {
-    SmolFinishWork();
+    MetalFinishWork();
     s_MetalCmdQueue = nil;
     s_MetalDevice = nil;
 }
@@ -364,6 +368,7 @@ struct SmolBuffer
 {
     id<MTLBuffer> buffer;
     size_t size;
+    bool writtenByGpuSinceLastRead = false;
 };
 
 SmolBuffer* SmolBufferCreate(size_t size, SmolBufferType type, size_t structElementSize)
@@ -383,10 +388,26 @@ void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t 
     [buffer->buffer didModifyRange: NSMakeRange(dstOffset, size)];
 }
 
+static void MetalBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer)
+{
+    SMOL_ASSERT(s_MetalCmdBuffer != nil);
+    MetalFlushActiveEncoders();
+    id<MTLBlitCommandEncoder> blit = [s_MetalCmdBuffer blitCommandEncoder];
+    [blit synchronizeResource:buffer->buffer];
+    [blit endEncoding];
+}
+
+
 void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset)
 {
     SMOL_ASSERT(buffer);
     SMOL_ASSERT(srcOffset + size <= buffer->size);
+    if (buffer->writtenByGpuSinceLastRead)
+    {
+        MetalBufferMakeGpuDataVisibleToCpu(buffer);
+        MetalFinishWork();
+        buffer->writtenByGpuSinceLastRead = false;
+    }
     const uint8_t* src = (const uint8_t*)[buffer->buffer contents];
     memcpy(dst, src + srcOffset, size);
 }
@@ -398,24 +419,6 @@ void SmolBufferDelete(SmolBuffer* buffer)
     SMOL_ASSERT(buffer->buffer != nil);
     buffer->buffer = nil;
     delete buffer;
-}
-
-static void FlushActiveEncoders()
-{
-    if (s_MetalComputeEncoder != nil)
-    {
-        [s_MetalComputeEncoder endEncoding];
-        s_MetalComputeEncoder = nil;
-    }
-}
-
-void SmolBufferMakeGpuDataVisibleToCpu(SmolBuffer* buffer)
-{
-    SMOL_ASSERT(s_MetalCmdBuffer != nil);
-    FlushActiveEncoders();
-    id<MTLBlitCommandEncoder> blit = [s_MetalCmdBuffer blitCommandEncoder];
-    [blit synchronizeResource:buffer->buffer];
-    [blit endEncoding];
 }
 
 static void StartCmdBufferIfNeeded()
@@ -484,7 +487,7 @@ void SmolKernelSet(SmolKernel* kernel)
     StartCmdBufferIfNeeded();
     if (s_MetalComputeEncoder == nil)
     {
-        FlushActiveEncoders();
+        MetalFlushActiveEncoders();
         s_MetalComputeEncoder = [s_MetalCmdBuffer computeCommandEncoder];
     }
     [s_MetalComputeEncoder setComputePipelineState:kernel->kernel];
@@ -493,6 +496,8 @@ void SmolKernelSet(SmolKernel* kernel)
 void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding)
 {
     SMOL_ASSERT(s_MetalComputeEncoder != nil);
+    if (binding == SmolBufferBinding::Output)
+        buffer->writtenByGpuSinceLastRead = true;
     [s_MetalComputeEncoder setBuffer:buffer->buffer offset:0 atIndex:index];
 }
 
@@ -503,16 +508,6 @@ void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX
     int groupsY = (threadsY + groupSizeY-1) / groupSizeY;
     int groupsZ = (threadsZ + groupSizeZ-1) / groupSizeZ;
     [s_MetalComputeEncoder dispatchThreadgroups:MTLSizeMake(groupsX, groupsY, groupsZ) threadsPerThreadgroup:MTLSizeMake(groupSizeX,groupSizeY,groupSizeZ)];
-}
-
-void SmolFinishWork()
-{
-    if (s_MetalCmdBuffer == nil)
-        return;
-    FlushActiveEncoders();
-    [s_MetalCmdBuffer commit];
-    [s_MetalCmdBuffer waitUntilCompleted];
-    s_MetalCmdBuffer = nil;
 }
 
 void SmolStartCapture()

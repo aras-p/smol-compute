@@ -581,8 +581,6 @@ bool IspcCompressBC3Test()
         SmolKernelSetBuffer(bufGlobals, 1, SmolBufferBinding::Constant);
         SmolKernelDispatch(inputWidth, inputHeight, 1, kGroupSize, kGroupSize, 1);
         
-        SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
-        SmolFinishWork();
         SmolBufferGetData(bufOutput, outputData, outputSize, 0);
         tDur = stm_since(tStart);
         printf("  BC3 set+compress+get for %ix%i took %.1fms\n", glob.image_width, glob.image_height, stm_ms(tDur));

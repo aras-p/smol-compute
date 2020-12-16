@@ -76,8 +76,6 @@ static bool SmokeTest()
         outputCheck[i] = res;
     }
     int output[kOutputSize];
-    SmolBufferMakeGpuDataVisibleToCpu(bufOutput);
-    SmolFinishWork();
     SmolBufferGetData(bufOutput, output, kOutputSize*4);
     
     if (memcmp(output, outputCheck, sizeof(output)) != 0)
