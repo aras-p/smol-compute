@@ -1,7 +1,11 @@
+// Copyright (c) 2020, Aras Pranckevicius
+// SPDX-License-Identifier: MIT
+
 #ifndef SMOL_COMPUTE_INCLUDED
 #define SMOL_COMPUTE_INCLUDED
 
 // smol-compute: a small library to run compute shaders on several graphics APIs.
+// https://github.com/aras-p/smol-compute
 //
 // This is a single-header library; for regular usage just include this header,
 // but you also have to do a:
