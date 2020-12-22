@@ -175,6 +175,21 @@ extern "C" {
     typedef int(SMOL_COMPUTE_RENDERDOC_CC* SmolImpl_pRENDERDOC_GetAPI)(SmolImpl_RENDERDOC_Version version, void** outAPIPointers);
 } // extern "C"
 
+static SmolImpl_RENDERDOC_API_1_4_1* s_RenderDocApi;
+
+#include <wtypes.h>
+
+static void SmolImpl_LoadRenderDoc()
+{
+    HMODULE dll = LoadLibraryA("C:\\Program Files\\RenderDoc\\renderdoc.dll");
+    if (dll)
+    {
+        SmolImpl_pRENDERDOC_GetAPI procGetApi = (SmolImpl_pRENDERDOC_GetAPI)GetProcAddress(dll, "RENDERDOC_GetAPI");
+        if (procGetApi)
+            procGetApi(SmolImpl_eRENDERDOC_API_Version_1_4_1, (void**)&s_RenderDocApi);
+    }
+}
+
 #endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
 
 
@@ -188,9 +203,6 @@ extern "C" {
 
 static ID3D11Device* s_D3D11Device;
 static ID3D11DeviceContext* s_D3D11Context;
-#if SMOL_COMPUTE_ENABLE_RENDERDOC
-static SmolImpl_RENDERDOC_API_1_4_1* s_RenderDocApi;
-#endif
 
 #define SMOL_RELEASE(o) { if (o) (o)->Release(); (o) = nullptr; }
 
@@ -198,15 +210,7 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
 {
 #if SMOL_COMPUTE_ENABLE_RENDERDOC
     if (HasFlag(flags, SmolComputeCreateFlags::EnableCapture))
-    {
-        HMODULE dll = LoadLibraryA("C:\\Program Files\\RenderDoc\\renderdoc.dll");
-        if (dll)
-        {
-            SmolImpl_pRENDERDOC_GetAPI procGetApi = (SmolImpl_pRENDERDOC_GetAPI)GetProcAddress(dll, "RENDERDOC_GetAPI");
-            if (procGetApi)
-                procGetApi(SmolImpl_eRENDERDOC_API_Version_1_4_1, (void**)&s_RenderDocApi);
-        }
-    }
+        SmolImpl_LoadRenderDoc();
 #endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
 
     HRESULT hr;
