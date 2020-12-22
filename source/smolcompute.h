@@ -44,6 +44,10 @@ enum class SmolComputeCreateFlags
     // - D3D11: uses RenderDoc (assumes installed in default location),
     // - Metal: uses Xcode Metal frame capture.
     EnableCapture = 1 << 0,
+    // Enable debug/validation layers when possible.
+    EnableDebugLayers = 1 << 1,
+    // Use software CPU device when possible.
+    UseSoftwareRenderer = 1 << 2,
 };
 SMOL_COMPUTE_ENUM_FLAGS(SmolComputeCreateFlags);
 
@@ -207,11 +211,11 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
 
     HRESULT hr;
     D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0 };
-#ifdef _DEBUG
-    hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_DEBUG, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
-#endif
+    D3D_DRIVER_TYPE driverType = HasFlag(flags, SmolComputeCreateFlags::UseSoftwareRenderer) ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE;
+    if (HasFlag(flags, SmolComputeCreateFlags::EnableDebugLayers))
+        hr = D3D11CreateDevice(NULL, driverType, NULL, D3D11_CREATE_DEVICE_DEBUG, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
     if (s_D3D11Device == nullptr)
-        hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
+        hr = D3D11CreateDevice(NULL, driverType, NULL, 0, levels, 1, D3D11_SDK_VERSION, &s_D3D11Device, NULL, &s_D3D11Context);
     if (FAILED(hr))
         return false;
     return true;
