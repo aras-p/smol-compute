@@ -19,9 +19,33 @@
 #include <stddef.h>
 
 
+// Small utility to implement bitwise operators on strongly typed C++11 enums
+#define SMOL_COMPUTE_ENUM_FLAGS(T) \
+    inline T operator |(T a, T b) { return (T)((unsigned)a | (unsigned)b); } \
+    inline T operator &(T a, T b) { return (T)((unsigned)a & (unsigned)b); } \
+    inline T operator ^(T a, T b) { return (T)((unsigned)a ^ (unsigned)b); } \
+    inline T operator ~(T a) { return (T)(~(unsigned)a); } \
+    inline T& operator |=(T& a, T b) { return a = a | b; } \
+    inline T& operator &=(T& a, T b) { return a = a & b; } \
+    inline T& operator ^=(T& a, T b) { return a = a ^ b; } \
+    inline bool HasFlag(T flags, T check) { return ((unsigned)flags & (unsigned)check) == (unsigned)check; } \
+    inline bool HasAnyFlag(T flags, T check) { return ((unsigned)flags & (unsigned)check) != 0; }
+
+
 struct SmolBuffer;
 struct SmolKernel;
 
+// Initialization flags (can be combined)
+enum class SmolComputeCreateFlags
+{
+    None = 0,
+    // Enable SmolCaptureStart/SmolCaptureFinish for capturing a computation into
+    // a graphics debugger.
+    // - D3D11: uses RenderDoc (assumes installed in default location),
+    // - Metal: uses Xcode Metal frame capture.
+    EnableCapture = 1 << 0,
+};
+SMOL_COMPUTE_ENUM_FLAGS(SmolComputeCreateFlags);
 
 // Data buffer type
 enum class SmolBufferType
@@ -38,9 +62,19 @@ enum class SmolBufferBinding
     Output,         // D3D11: output (RWStructuredBuffer), Metal: does not care
 };
 
+// Kernel creation flags (can be combined)
+enum class SmolKernelCreateFlags
+{
+	None = 0,
+	DisableOptimizations = 1 << 0,  // D3D11: disable all optimizations. Metal: ignored.
+    GenerateDebugInfo = 1 << 1,     // D3D11: generate debug symbols. Metal: ignored.
+    EnableFastMath = 1 << 2,        // D3D11: do not pass IEEE strictness flag. Metal: sets fastMathEnabled flag.
+};
+SMOL_COMPUTE_ENUM_FLAGS(SmolKernelCreateFlags);
+
 
 // Initialize the library. This has to be called before doing other work.
-bool SmolComputeCreate();
+bool SmolComputeCreate(SmolComputeCreateFlags flags = SmolComputeCreateFlags::None);
 // Shutdown the library.
 void SmolComputeDelete();
 
@@ -59,14 +93,17 @@ void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOff
 // for dispatches to complete.
 // - Dispatch is number of "threads" launched, not number of "thread groups".
 
-SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint);
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint, SmolKernelCreateFlags flags = SmolKernelCreateFlags::None);
 void SmolKernelDelete(SmolKernel* kernel);
 void SmolKernelSet(SmolKernel* kernel);
 void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding = SmolBufferBinding::Input);
 void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ);
 
-void SmolStartCapture();
-void SmolFinishCapture();
+
+// Starts and finishes capture into a graphics debugger.
+// Initialization must be done with SmolComputeCreateFlags::EnableCapture flag.
+void SmolCaptureStart();
+void SmolCaptureFinish();
 
 #endif // #ifndef SMOL_COMPUTE_INCLUDED
 
@@ -85,6 +122,59 @@ void SmolFinishCapture();
 
 
 // ------------------------------------------------------------------------------------------------
+//  Stripped down RenderDoc API header, from renderdoc_app.h
+//  Original header is Copyright (c) 2019-2020 Baldur Karlsson, MIT license
+//  Documentation for the API is available at https://renderdoc.org/docs/in_application_api.html
+
+#define SMOL_COMPUTE_ENABLE_RENDERDOC (SMOL_COMPUTE_D3D11)
+
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+
+#if defined(WIN32) || defined(__WIN32__) || defined(_WIN32) || defined(_MSC_VER)
+#define SMOL_COMPUTE_RENDERDOC_CC __cdecl
+#else
+#define SMOL_COMPUTE_RENDERDOC_CC
+#endif
+
+extern "C" {
+    typedef void(SMOL_COMPUTE_RENDERDOC_CC* SmolImpl_pRENDERDOC_StartFrameCapture)(void* device, void* wndHandle);
+    typedef unsigned int(SMOL_COMPUTE_RENDERDOC_CC* SmolImpl_pRENDERDOC_EndFrameCapture)(void* device, void* wndHandle);
+    enum SmolImpl_RENDERDOC_Version { SmolImpl_eRENDERDOC_API_Version_1_4_1 = 10401 };
+    struct SmolImpl_RENDERDOC_API_1_4_1
+    {
+        void* GetAPIVersion;
+        void* SetCaptureOptionU32;
+        void* SetCaptureOptionF32;
+        void* GetCaptureOptionU32;
+        void* GetCaptureOptionF32;
+        void* SetFocusToggleKeys;
+        void* SetCaptureKeys;
+        void* GetOverlayBits;
+        void* MaskOverlayBits;
+        void* RemoveHooks;
+        void* UnloadCrashHandler;
+		void* SetCaptureFilePathTemplate;
+		void* GetCaptureFilePathTemplate;
+        void* GetNumCaptures;
+        void* GetCapture;
+        void* TriggerCapture;
+        void* IsTargetControlConnected;
+        void* LaunchReplayUI;
+        void* SetActiveWindow;
+        SmolImpl_pRENDERDOC_StartFrameCapture StartFrameCapture;
+        void* IsFrameCapturing;
+        SmolImpl_pRENDERDOC_EndFrameCapture EndFrameCapture;
+        void* TriggerMultiFrameCapture;
+        void* SetCaptureFileComments;
+        void* DiscardFrameCapture;
+    };
+    typedef int(SMOL_COMPUTE_RENDERDOC_CC* SmolImpl_pRENDERDOC_GetAPI)(SmolImpl_RENDERDOC_Version version, void** outAPIPointers);
+} // extern "C"
+
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+
+
+// ------------------------------------------------------------------------------------------------
 //  D3D11
 
 
@@ -94,11 +184,27 @@ void SmolFinishCapture();
 
 static ID3D11Device* s_D3D11Device;
 static ID3D11DeviceContext* s_D3D11Context;
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+static SmolImpl_RENDERDOC_API_1_4_1* s_RenderDocApi;
+#endif
 
 #define SMOL_RELEASE(o) { if (o) (o)->Release(); (o) = nullptr; }
 
-bool SmolComputeCreate()
+bool SmolComputeCreate(SmolComputeCreateFlags flags)
 {
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+    if (HasFlag(flags, SmolComputeCreateFlags::EnableCapture))
+    {
+        HMODULE dll = LoadLibraryA("C:\\Program Files\\RenderDoc\\renderdoc.dll");
+        if (dll)
+        {
+            SmolImpl_pRENDERDOC_GetAPI procGetApi = (SmolImpl_pRENDERDOC_GetAPI)GetProcAddress(dll, "RENDERDOC_GetAPI");
+            if (procGetApi)
+                procGetApi(SmolImpl_eRENDERDOC_API_Version_1_4_1, (void**)&s_RenderDocApi);
+        }
+    }
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+
     HRESULT hr;
     D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0 };
 #ifdef _DEBUG
@@ -224,14 +330,22 @@ struct SmolKernel
     ID3D11ComputeShader* kernel;
 };
 
-SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint, SmolKernelCreateFlags flags)
 {
     ID3DBlob* bytecode = nullptr;
     ID3DBlob* errors = nullptr;
-    HRESULT hr = D3DCompile(shaderCode, shaderCodeSize, "", NULL, NULL, entryPoint, "cs_5_0", D3DCOMPILE_IEEE_STRICTNESS, 0, &bytecode, &errors);
+    UINT d3dflags = 0;
+    if (!HasFlag(flags, SmolKernelCreateFlags::EnableFastMath))
+        d3dflags |= D3DCOMPILE_IEEE_STRICTNESS;
+    if (HasFlag(flags, SmolKernelCreateFlags::DisableOptimizations))
+        d3dflags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+    if (HasFlag(flags, SmolKernelCreateFlags::GenerateDebugInfo))
+        d3dflags |= D3DCOMPILE_DEBUG;
+    HRESULT hr = D3DCompile(shaderCode, shaderCodeSize, "", NULL, NULL, entryPoint, "cs_5_0", d3dflags, 0, &bytecode, &errors);
     if (FAILED(hr))
     {
         const char* errMsg = (const char*)errors->GetBufferPointer();
+        OutputDebugStringA(errMsg);
         SMOL_RELEASE(bytecode);
         SMOL_RELEASE(errors);
         return nullptr;
@@ -317,6 +431,25 @@ void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX
     s_D3D11Context->Dispatch(groupsX, groupsY, groupsZ);
 }
 
+void SmolCaptureStart()
+{
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+    if (!s_RenderDocApi)
+        return;
+    s_RenderDocApi->StartFrameCapture(NULL, NULL);
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+}
+
+void SmolCaptureFinish()
+{
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+	if (!s_RenderDocApi)
+		return;
+	s_RenderDocApi->EndFrameCapture(NULL, NULL);
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+}
+
+
 #endif // #if SMOL_COMPUTE_D3D11
 
 
@@ -354,7 +487,7 @@ static void MetalFinishWork()
     s_MetalCmdBuffer = nil;
 }
 
-bool SmolComputeCreate()
+bool SmolComputeCreate(SmolComputeCreateFlags flags)
 {
     s_MetalDevice = MTLCreateSystemDefaultDevice();
     s_MetalCmdQueue = [s_MetalDevice newCommandQueue];
@@ -436,10 +569,10 @@ struct SmolKernel
     id<MTLComputePipelineState> kernel;
 };
 
-SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint)
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint, SmolKernelCreateFlags flags)
 {
     MTLCompileOptions* opt = [MTLCompileOptions new];
-    opt.fastMathEnabled = false;
+    opt.fastMathEnabled = HasFlag(flags, SmolKernelCreateFlags::EnableFastMath);
 
     NSString* srcStr = [[NSString alloc] initWithBytes: shaderCode length: shaderCodeSize encoding: NSASCIIStringEncoding];
 
@@ -514,12 +647,12 @@ void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX
     [s_MetalComputeEncoder dispatchThreadgroups:MTLSizeMake(groupsX, groupsY, groupsZ) threadsPerThreadgroup:MTLSizeMake(groupSizeX,groupSizeY,groupSizeZ)];
 }
 
-void SmolStartCapture()
+void SmolCaptureStart()
 {
     MTLCaptureManager* capture = [MTLCaptureManager sharedCaptureManager];
     [capture startCaptureWithDevice: s_MetalDevice];
 }
-void SmolFinishCapture()
+void SmolCaptureFinish()
 {
     MTLCaptureManager* capture = [MTLCaptureManager sharedCaptureManager];
     if ([capture isCapturing])
