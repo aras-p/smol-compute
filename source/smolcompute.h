@@ -98,6 +98,7 @@ void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOff
 // - Dispatch is number of "threads" launched, not number of "thread groups".
 
 SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint, SmolKernelCreateFlags flags = SmolKernelCreateFlags::None);
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize);
 void SmolKernelDelete(SmolKernel* kernel);
 void SmolKernelSet(SmolKernel* kernel);
 void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding = SmolBufferBinding::Input);
@@ -371,6 +372,17 @@ SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, cons
     SmolKernel* kernel = new SmolKernel();
     kernel->kernel = cs;
     return kernel;
+}
+
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize)
+{
+	ID3D11ComputeShader* cs = nullptr;
+	HRESULT hr = s_D3D11Device->CreateComputeShader(shaderCode, shaderCodeSize, NULL, &cs);
+	if (FAILED(hr))
+		return nullptr;
+	SmolKernel* kernel = new SmolKernel();
+	kernel->kernel = cs;
+	return kernel;
 }
 
 void SmolKernelDelete(SmolKernel* kernel)
