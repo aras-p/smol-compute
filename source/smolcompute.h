@@ -35,6 +35,14 @@
 struct SmolBuffer;
 struct SmolKernel;
 
+// Backend implementation type
+enum class SmolBackend
+{
+    D3D11 = 0,
+    Metal,
+    Vulkan,
+};
+
 // Initialization flags (can be combined)
 enum class SmolComputeCreateFlags
 {
@@ -81,7 +89,8 @@ SMOL_COMPUTE_ENUM_FLAGS(SmolKernelCreateFlags);
 bool SmolComputeCreate(SmolComputeCreateFlags flags = SmolComputeCreateFlags::None);
 // Shutdown the library.
 void SmolComputeDelete();
-
+// Get backend implementation type.
+SmolBackend SmolComputeGetBackend();
 
 // Data buffers: create, delete, set and get data.
 // - All sizes are in bytes.
@@ -116,8 +125,8 @@ void SmolCaptureFinish();
 
 #if SMOL_COMPUTE_IMPLEMENTATION
 
-#if !SMOL_COMPUTE_D3D11 && !SMOL_COMPUTE_METAL
-#error Define one of SMOL_COMPUTE_D3D11 or SMOL_COMPUTE_METAL for a SMOL_COMPUTE_IMPLEMENTATION compile.
+#if !SMOL_COMPUTE_D3D11 && !SMOL_COMPUTE_METAL && !SMOL_COMPUTE_VULKAN
+#error Define one of SMOL_COMPUTE_D3D11, SMOL_COMPUTE_METAL or SMOL_COMPUTE_VULKAN for a SMOL_COMPUTE_IMPLEMENTATION compile.
 #endif
 
 #ifndef SMOL_ASSERT
@@ -131,7 +140,7 @@ void SmolCaptureFinish();
 //  Original header is Copyright (c) 2019-2020 Baldur Karlsson, MIT license
 //  Documentation for the API is available at https://renderdoc.org/docs/in_application_api.html
 
-#define SMOL_COMPUTE_ENABLE_RENDERDOC (SMOL_COMPUTE_D3D11)
+#define SMOL_COMPUTE_ENABLE_RENDERDOC (SMOL_COMPUTE_D3D11 || SMOL_COMPUTE_VULKAN)
 
 #if SMOL_COMPUTE_ENABLE_RENDERDOC
 
@@ -231,6 +240,12 @@ void SmolComputeDelete()
     SMOL_RELEASE(s_D3D11Context);
     SMOL_RELEASE(s_D3D11Device);
 }
+
+SmolBackend SmolComputeGetBackend()
+{
+    return SmolBackend::D3D11;
+}
+
 
 struct SmolBuffer
 {
@@ -519,6 +534,11 @@ void SmolComputeDelete()
     MetalFinishWork();
     s_MetalCmdQueue = nil;
     s_MetalDevice = nil;
+}
+
+SmolBackend SmolComputeGetBackend()
+{
+    return SmolBackend::Metal;
 }
 
 struct SmolBuffer
