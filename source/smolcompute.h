@@ -492,7 +492,154 @@ void SmolCaptureFinish()
 //  Vulkan
 
 #if SMOL_COMPUTE_VULKAN
-#include "volk.h"
+
+#define VK_USE_PLATFORM_WIN32_KHR
+#define VK_NO_PROTOTYPES
+#include "vulkan/vk_platform.h"
+#include "vulkan/vulkan_core.h"
+typedef unsigned long DWORD;
+typedef const wchar_t* LPCWSTR;
+typedef void* HANDLE;
+typedef struct HINSTANCE__* HINSTANCE;
+typedef struct HWND__* HWND;
+typedef struct HMONITOR__* HMONITOR;
+typedef struct _SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
+#include "vulkan/vulkan_win32.h"
+
+// Manually loaded minimal set of Vulkan function pointers that we need, so that we don't
+// have to link with the loader.
+extern "C" {
+    // Vulkan 1.0
+    static PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers;
+    static PFN_vkAllocateDescriptorSets vkAllocateDescriptorSets;
+    static PFN_vkAllocateMemory vkAllocateMemory;
+    static PFN_vkBeginCommandBuffer vkBeginCommandBuffer;
+    static PFN_vkBindBufferMemory vkBindBufferMemory;
+    static PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets;
+    static PFN_vkCmdBindPipeline vkCmdBindPipeline;
+    static PFN_vkCmdDispatch vkCmdDispatch;
+    static PFN_vkCmdExecuteCommands vkCmdExecuteCommands;
+    static PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer;
+    static PFN_vkCreateBuffer vkCreateBuffer;
+    static PFN_vkCreateCommandPool vkCreateCommandPool;
+    static PFN_vkCreateComputePipelines vkCreateComputePipelines;
+    static PFN_vkCreateDescriptorPool vkCreateDescriptorPool;
+    static PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout;
+    static PFN_vkCreateDevice vkCreateDevice;
+    static PFN_vkCreateInstance vkCreateInstance;
+    static PFN_vkCreatePipelineCache vkCreatePipelineCache;
+    static PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
+    static PFN_vkCreateShaderModule vkCreateShaderModule;
+    static PFN_vkDestroyBuffer vkDestroyBuffer;
+    static PFN_vkDestroyCommandPool vkDestroyCommandPool;
+    static PFN_vkDestroyDescriptorPool vkDestroyDescriptorPool;
+    static PFN_vkDestroyDescriptorSetLayout vkDestroyDescriptorSetLayout;
+    static PFN_vkDestroyDevice vkDestroyDevice;
+    static PFN_vkDestroyInstance vkDestroyInstance;
+    static PFN_vkDestroyPipeline vkDestroyPipeline;
+    static PFN_vkDestroyPipelineCache vkDestroyPipelineCache;
+    static PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout;
+    static PFN_vkDestroyShaderModule vkDestroyShaderModule;
+    static PFN_vkDeviceWaitIdle vkDeviceWaitIdle;
+    static PFN_vkEndCommandBuffer vkEndCommandBuffer;
+    static PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
+    static PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
+    static PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
+    static PFN_vkFreeDescriptorSets vkFreeDescriptorSets;
+    static PFN_vkFreeMemory vkFreeMemory;
+    static PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
+    static PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
+    static PFN_vkGetDeviceQueue vkGetDeviceQueue;
+    static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+    static PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures;
+    static PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties;
+    static PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties;
+    static PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
+    static PFN_vkGetPipelineCacheData vkGetPipelineCacheData;
+    static PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges;
+    static PFN_vkMapMemory vkMapMemory;
+    static PFN_vkQueueSubmit vkQueueSubmit;
+    static PFN_vkQueueWaitIdle vkQueueWaitIdle;
+    static PFN_vkResetCommandBuffer vkResetCommandBuffer;
+    static PFN_vkResetCommandPool vkResetCommandPool;
+    static PFN_vkResetDescriptorPool vkResetDescriptorPool;
+    static PFN_vkUnmapMemory vkUnmapMemory;
+    static PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets;
+    // VK_EXT_debug_report
+    static PFN_vkCreateDebugReportCallbackEXT vkCreateDebugReportCallbackEXT;
+    static PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallbackEXT;
+} // extern "C"
+
+static VkResult SmolImpl_VkInitialize()
+{
+    HMODULE dll = LoadLibraryA("vulkan-1.dll");
+    if (!dll)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)GetProcAddress(dll, "vkGetInstanceProcAddr");
+    vkCreateInstance = (PFN_vkCreateInstance)vkGetInstanceProcAddr(0, "vkCreateInstance");
+    return VK_SUCCESS;
+}
+
+static void SmolImpl_VkLoadInstanceFunctions(VkInstance instance)
+{
+    vkAllocateCommandBuffers = (PFN_vkAllocateCommandBuffers)vkGetInstanceProcAddr(instance, "vkAllocateCommandBuffers");
+    vkAllocateDescriptorSets = (PFN_vkAllocateDescriptorSets)vkGetInstanceProcAddr(instance, "vkAllocateDescriptorSets");
+    vkAllocateMemory = (PFN_vkAllocateMemory)vkGetInstanceProcAddr(instance, "vkAllocateMemory");
+    vkBeginCommandBuffer = (PFN_vkBeginCommandBuffer)vkGetInstanceProcAddr(instance, "vkBeginCommandBuffer");
+    vkBindBufferMemory = (PFN_vkBindBufferMemory)vkGetInstanceProcAddr(instance, "vkBindBufferMemory");
+    vkCmdBindDescriptorSets = (PFN_vkCmdBindDescriptorSets)vkGetInstanceProcAddr(instance, "vkCmdBindDescriptorSets");
+    vkCmdBindPipeline = (PFN_vkCmdBindPipeline)vkGetInstanceProcAddr(instance, "vkCmdBindPipeline");
+    vkCmdDispatch = (PFN_vkCmdDispatch)vkGetInstanceProcAddr(instance, "vkCmdDispatch");
+    vkCmdExecuteCommands = (PFN_vkCmdExecuteCommands)vkGetInstanceProcAddr(instance, "vkCmdExecuteCommands");
+    vkCmdUpdateBuffer = (PFN_vkCmdUpdateBuffer)vkGetInstanceProcAddr(instance, "vkCmdUpdateBuffer");
+    vkCreateBuffer = (PFN_vkCreateBuffer)vkGetInstanceProcAddr(instance, "vkCreateBuffer");
+    vkCreateCommandPool = (PFN_vkCreateCommandPool)vkGetInstanceProcAddr(instance, "vkCreateCommandPool");
+    vkCreateComputePipelines = (PFN_vkCreateComputePipelines)vkGetInstanceProcAddr(instance, "vkCreateComputePipelines");
+    vkCreateDescriptorPool = (PFN_vkCreateDescriptorPool)vkGetInstanceProcAddr(instance, "vkCreateDescriptorPool");
+    vkCreateDescriptorSetLayout = (PFN_vkCreateDescriptorSetLayout)vkGetInstanceProcAddr(instance, "vkCreateDescriptorSetLayout");
+    vkCreateDevice = (PFN_vkCreateDevice)vkGetInstanceProcAddr(instance, "vkCreateDevice");
+    vkCreatePipelineCache = (PFN_vkCreatePipelineCache)vkGetInstanceProcAddr(instance, "vkCreatePipelineCache");
+    vkCreatePipelineLayout = (PFN_vkCreatePipelineLayout)vkGetInstanceProcAddr(instance, "vkCreatePipelineLayout");
+    vkCreateShaderModule = (PFN_vkCreateShaderModule)vkGetInstanceProcAddr(instance, "vkCreateShaderModule");
+    vkDestroyBuffer = (PFN_vkDestroyBuffer)vkGetInstanceProcAddr(instance, "vkDestroyBuffer");
+    vkDestroyCommandPool = (PFN_vkDestroyCommandPool)vkGetInstanceProcAddr(instance, "vkDestroyCommandPool");
+    vkDestroyDescriptorPool = (PFN_vkDestroyDescriptorPool)vkGetInstanceProcAddr(instance, "vkDestroyDescriptorPool");
+    vkDestroyDescriptorSetLayout = (PFN_vkDestroyDescriptorSetLayout)vkGetInstanceProcAddr(instance, "vkDestroyDescriptorSetLayout");
+    vkDestroyDevice = (PFN_vkDestroyDevice)vkGetInstanceProcAddr(instance, "vkDestroyDevice");
+    vkDestroyInstance = (PFN_vkDestroyInstance)vkGetInstanceProcAddr(instance, "vkDestroyInstance");
+    vkDestroyPipeline = (PFN_vkDestroyPipeline)vkGetInstanceProcAddr(instance, "vkDestroyPipeline");
+    vkDestroyPipelineCache = (PFN_vkDestroyPipelineCache)vkGetInstanceProcAddr(instance, "vkDestroyPipelineCache");
+    vkDestroyPipelineLayout = (PFN_vkDestroyPipelineLayout)vkGetInstanceProcAddr(instance, "vkDestroyPipelineLayout");
+    vkDestroyShaderModule = (PFN_vkDestroyShaderModule)vkGetInstanceProcAddr(instance, "vkDestroyShaderModule");
+    vkDeviceWaitIdle = (PFN_vkDeviceWaitIdle)vkGetInstanceProcAddr(instance, "vkDeviceWaitIdle");
+    vkEndCommandBuffer = (PFN_vkEndCommandBuffer)vkGetInstanceProcAddr(instance, "vkEndCommandBuffer");
+    vkEnumeratePhysicalDevices = (PFN_vkEnumeratePhysicalDevices)vkGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices");
+    vkFlushMappedMemoryRanges = (PFN_vkFlushMappedMemoryRanges)vkGetInstanceProcAddr(instance, "vkFlushMappedMemoryRanges");
+    vkFreeCommandBuffers = (PFN_vkFreeCommandBuffers)vkGetInstanceProcAddr(instance, "vkFreeCommandBuffers");
+    vkFreeDescriptorSets = (PFN_vkFreeDescriptorSets)vkGetInstanceProcAddr(instance, "vkFreeDescriptorSets");
+    vkFreeMemory = (PFN_vkFreeMemory)vkGetInstanceProcAddr(instance, "vkFreeMemory");
+    vkGetBufferMemoryRequirements = (PFN_vkGetBufferMemoryRequirements)vkGetInstanceProcAddr(instance, "vkGetBufferMemoryRequirements");
+    vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)vkGetInstanceProcAddr(instance, "vkGetDeviceProcAddr");
+    vkGetDeviceQueue = (PFN_vkGetDeviceQueue)vkGetInstanceProcAddr(instance, "vkGetDeviceQueue");
+    vkGetPhysicalDeviceFeatures = (PFN_vkGetPhysicalDeviceFeatures)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures");
+    vkGetPhysicalDeviceMemoryProperties = (PFN_vkGetPhysicalDeviceMemoryProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceMemoryProperties");
+    vkGetPhysicalDeviceProperties = (PFN_vkGetPhysicalDeviceProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties");
+    vkGetPhysicalDeviceQueueFamilyProperties = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceQueueFamilyProperties");
+    vkGetPipelineCacheData = (PFN_vkGetPipelineCacheData)vkGetInstanceProcAddr(instance, "vkGetPipelineCacheData");
+    vkInvalidateMappedMemoryRanges = (PFN_vkInvalidateMappedMemoryRanges)vkGetInstanceProcAddr(instance, "vkInvalidateMappedMemoryRanges");
+    vkMapMemory = (PFN_vkMapMemory)vkGetInstanceProcAddr(instance, "vkMapMemory");
+    vkQueueSubmit = (PFN_vkQueueSubmit)vkGetInstanceProcAddr(instance, "vkQueueSubmit");
+    vkQueueWaitIdle = (PFN_vkQueueWaitIdle)vkGetInstanceProcAddr(instance, "vkQueueWaitIdle");
+    vkResetCommandBuffer = (PFN_vkResetCommandBuffer)vkGetInstanceProcAddr(instance, "vkResetCommandBuffer");
+    vkResetCommandPool = (PFN_vkResetCommandPool)vkGetInstanceProcAddr(instance, "vkResetCommandPool");
+    vkResetDescriptorPool = (PFN_vkResetDescriptorPool)vkGetInstanceProcAddr(instance, "vkResetDescriptorPool");
+    vkUnmapMemory = (PFN_vkUnmapMemory)vkGetInstanceProcAddr(instance, "vkUnmapMemory");
+    vkUpdateDescriptorSets = (PFN_vkUpdateDescriptorSets)vkGetInstanceProcAddr(instance, "vkUpdateDescriptorSets");
+
+    vkCreateDebugReportCallbackEXT = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
+    vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
+}
+
 #include <malloc.h>
 #include <memory>
 
@@ -565,14 +712,14 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
         SmolImpl_LoadRenderDoc();
 #endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
 
-    if (volkInitialize() != VK_SUCCESS)
+    if (SmolImpl_VkInitialize() != VK_SUCCESS)
         return false;
 
     // instance
     const VkApplicationInfo applicationInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO, 0, "smol_compute", 0, "smol_compute", 0, VK_MAKE_VERSION(1, 1, 0) };
     VkInstanceCreateInfo instanceCreateInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     const char* debugLayers[] = { "VK_LAYER_KHRONOS_validation" };
-    const char* debugExtensions[] = { "VK_EXT_DEBUG_REPORT_EXTENSION_NAME" };
+    const char* debugExtensions[] = { "VK_EXT_debug_report" };
     bool useDebugLayer = HasFlag(flags, SmolComputeCreateFlags::EnableDebugLayers);
     if (useDebugLayer)
     {
@@ -584,7 +731,7 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
     instanceCreateInfo.pApplicationInfo = &applicationInfo;
     VkResult res;
     res = vkCreateInstance(&instanceCreateInfo, 0, &s_VkInstance);
-    if (res == VK_ERROR_LAYER_NOT_PRESENT)
+    if (res == VK_ERROR_LAYER_NOT_PRESENT || res == VK_ERROR_EXTENSION_NOT_PRESENT)
     {
         // no debug layer support; run without
         useDebugLayer = false;
@@ -596,7 +743,7 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
     }
     if (res != VK_SUCCESS)
         return false;
-    volkLoadInstance(s_VkInstance);
+    SmolImpl_VkLoadInstanceFunctions(s_VkInstance);
 
     if (useDebugLayer)
     {
