@@ -506,46 +506,7 @@ static uint32_t s_VkMemoryTypeDeviceLocal;
 static VkDescriptorPool s_VkDescriptorPool;
 static VkCommandPool s_VkCommandPool;
 static VkCommandBuffer s_VkCommandBuffer;
-
-static VkResult SmolImpl_GetBestTransferQueue(VkPhysicalDevice device, uint32_t* outQueueFamilyIndex)
-{
-    uint32_t propsCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, 0);
-    VkQueueFamilyProperties* props = (VkQueueFamilyProperties*)_alloca(sizeof(VkQueueFamilyProperties) * propsCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, props);
-
-    // try to find a queue that only has the transfer bit
-    for (uint32_t i = 0; i < propsCount; ++i)
-    {
-        auto flags = props[i].queueFlags;
-        if ((flags & VK_QUEUE_TRANSFER_BIT) && !(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)))
-        {
-            *outQueueFamilyIndex = i;
-            return VK_SUCCESS;
-        }
-    }
-    // otherwise try to find a compute-only queue
-    for (uint32_t i = 0; i < propsCount; ++i)
-    {
-        auto flags = props[i].queueFlags;
-        if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT))
-        {
-            *outQueueFamilyIndex = i;
-            return VK_SUCCESS;
-        }
-    }
-    // otherwise get any suitable queue
-    for (uint32_t i = 0; i < propsCount; ++i)
-    {
-        auto flags = props[i].queueFlags;
-        if (flags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT))
-        {
-            *outQueueFamilyIndex = i;
-            return VK_SUCCESS;
-        }
-    }
-    return VK_ERROR_INITIALIZATION_FAILED;
-}
+static VkDebugReportCallbackEXT s_VkDebugReportCallback;
 
 static VkResult SmolImpl_GetBestComputeQueue(VkPhysicalDevice device, uint32_t* outQueueFamilyIndex)
 {
@@ -577,6 +538,24 @@ static VkResult SmolImpl_GetBestComputeQueue(VkPhysicalDevice device, uint32_t* 
     return VK_ERROR_INITIALIZATION_FAILED;
 }
 
+static VkBool32 VKAPI_CALL SmolImpl_VkDebugReportCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location, int32_t messageCode, const char* pLayerPrefix, const char* pMessage, void* pUserData)
+{
+    // Silence performance warnings
+    if (flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)
+        return VK_FALSE;
+
+    const char* type = (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) ? "ERROR" : (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) ? "WARNING" : "INFO";
+    char message[4096];
+    snprintf(message, sizeof(message), "Vulkan %s: %s\n", type, pMessage);
+    printf("%s", message);
+#ifdef _WIN32
+    OutputDebugStringA(message);
+#endif
+    if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+        assert(!"Vulkan validation error encountered!");
+
+    return VK_FALSE;
+}
 
 
 bool SmolComputeCreate(SmolComputeCreateFlags flags)
@@ -591,12 +570,41 @@ bool SmolComputeCreate(SmolComputeCreateFlags flags)
 
     // instance
     const VkApplicationInfo applicationInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO, 0, "smol_compute", 0, "smol_compute", 0, VK_MAKE_VERSION(1, 1, 0) };
-    const VkInstanceCreateInfo instanceCreateInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, 0, 0, &applicationInfo, 0, 0, 0, 0 };
+    VkInstanceCreateInfo instanceCreateInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    const char* debugLayers[] = { "VK_LAYER_KHRONOS_validation" };
+    const char* debugExtensions[] = { "VK_EXT_DEBUG_REPORT_EXTENSION_NAME" };
+    bool useDebugLayer = HasFlag(flags, SmolComputeCreateFlags::EnableDebugLayers);
+    if (useDebugLayer)
+    {
+        instanceCreateInfo.enabledLayerCount = 1;
+        instanceCreateInfo.ppEnabledLayerNames = debugLayers;
+        instanceCreateInfo.enabledExtensionCount = 1;
+        instanceCreateInfo.ppEnabledExtensionNames = debugExtensions;
+    }
+    instanceCreateInfo.pApplicationInfo = &applicationInfo;
     VkResult res;
     res = vkCreateInstance(&instanceCreateInfo, 0, &s_VkInstance);
+    if (res == VK_ERROR_LAYER_NOT_PRESENT)
+    {
+        // no debug layer support; run without
+        useDebugLayer = false;
+        instanceCreateInfo.enabledLayerCount = 0;
+        instanceCreateInfo.ppEnabledLayerNames = 0;
+        instanceCreateInfo.enabledExtensionCount = 0;
+        instanceCreateInfo.ppEnabledExtensionNames = 0;
+        res = vkCreateInstance(&instanceCreateInfo, 0, &s_VkInstance);
+    }
     if (res != VK_SUCCESS)
         return false;
     volkLoadInstance(s_VkInstance);
+
+    if (useDebugLayer)
+    {
+        VkDebugReportCallbackCreateInfoEXT createInfo = { VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT };
+        createInfo.flags = VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT | VK_DEBUG_REPORT_ERROR_BIT_EXT;
+        createInfo.pfnCallback = SmolImpl_VkDebugReportCallback;
+        res = vkCreateDebugReportCallbackEXT(s_VkInstance, &createInfo, 0, &s_VkDebugReportCallback);
+    }
 
     // physical devices
     uint32_t physicalDeviceCount = 0;
@@ -694,6 +702,7 @@ void SmolComputeDelete()
     if (s_VkCommandPool) vkDestroyCommandPool(s_VkDevice, s_VkCommandPool, 0); s_VkCommandPool = 0;
     if (s_VkDescriptorPool) vkDestroyDescriptorPool(s_VkDevice, s_VkDescriptorPool, 0); s_VkDescriptorPool = 0;
     if (s_VkDevice) vkDestroyDevice(s_VkDevice, 0); s_VkDevice = 0;
+    if (s_VkDebugReportCallback) vkDestroyDebugReportCallbackEXT(s_VkInstance, s_VkDebugReportCallback, 0); s_VkDebugReportCallback = 0;
     if (s_VkInstance) vkDestroyInstance(s_VkInstance, 0); s_VkInstance = 0;
 }
 
