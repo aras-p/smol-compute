@@ -489,6 +489,703 @@ void SmolCaptureFinish()
 
 
 // ------------------------------------------------------------------------------------------------
+//  Vulkan
+
+#if SMOL_COMPUTE_VULKAN
+#include "volk.h"
+#include <malloc.h>
+#include <memory>
+
+static VkInstance s_VkInstance;
+static VkDevice s_VkDevice;
+static uint32_t s_VkComputeQueueIndex;
+static VkQueue s_VkComputeQueue;
+static uint32_t s_VkMemoryTypeHostVisibleNonCoherent;
+static uint32_t s_VkMemoryTypeHostVisibleCoherent;
+static uint32_t s_VkMemoryTypeDeviceLocal;
+static VkDescriptorPool s_VkDescriptorPool;
+static VkCommandPool s_VkCommandPool;
+static VkCommandBuffer s_VkCommandBuffer;
+
+static VkResult SmolImpl_GetBestTransferQueue(VkPhysicalDevice device, uint32_t* outQueueFamilyIndex)
+{
+    uint32_t propsCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, 0);
+    VkQueueFamilyProperties* props = (VkQueueFamilyProperties*)_alloca(sizeof(VkQueueFamilyProperties) * propsCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, props);
+
+    // try to find a queue that only has the transfer bit
+    for (uint32_t i = 0; i < propsCount; ++i)
+    {
+        auto flags = props[i].queueFlags;
+        if ((flags & VK_QUEUE_TRANSFER_BIT) && !(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)))
+        {
+            *outQueueFamilyIndex = i;
+            return VK_SUCCESS;
+        }
+    }
+    // otherwise try to find a compute-only queue
+    for (uint32_t i = 0; i < propsCount; ++i)
+    {
+        auto flags = props[i].queueFlags;
+        if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT))
+        {
+            *outQueueFamilyIndex = i;
+            return VK_SUCCESS;
+        }
+    }
+    // otherwise get any suitable queue
+    for (uint32_t i = 0; i < propsCount; ++i)
+    {
+        auto flags = props[i].queueFlags;
+        if (flags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT))
+        {
+            *outQueueFamilyIndex = i;
+            return VK_SUCCESS;
+        }
+    }
+    return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+static VkResult SmolImpl_GetBestComputeQueue(VkPhysicalDevice device, uint32_t* outQueueFamilyIndex)
+{
+    uint32_t propsCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, 0);
+    VkQueueFamilyProperties* props = (VkQueueFamilyProperties*)_alloca(sizeof(VkQueueFamilyProperties) * propsCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &propsCount, props);
+
+    // try to find a queue that only has the compute bit
+    for (uint32_t i = 0; i < propsCount; ++i)
+    {
+        auto flags = props[i].queueFlags;
+        if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT))
+        {
+            *outQueueFamilyIndex = i;
+            return VK_SUCCESS;
+        }
+    }
+    // otherwise get any suitable queue
+    for (uint32_t i = 0; i < propsCount; ++i)
+    {
+        auto flags = props[i].queueFlags;
+        if (flags & VK_QUEUE_COMPUTE_BIT)
+        {
+            *outQueueFamilyIndex = i;
+            return VK_SUCCESS;
+        }
+    }
+    return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+
+
+bool SmolComputeCreate(SmolComputeCreateFlags flags)
+{
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+    if (HasFlag(flags, SmolComputeCreateFlags::EnableCapture))
+        SmolImpl_LoadRenderDoc();
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+
+    if (volkInitialize() != VK_SUCCESS)
+        return false;
+
+    // instance
+    const VkApplicationInfo applicationInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO, 0, "smol_compute", 0, "smol_compute", 0, VK_MAKE_VERSION(1, 1, 0) };
+    const VkInstanceCreateInfo instanceCreateInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, 0, 0, &applicationInfo, 0, 0, 0, 0 };
+    VkResult res;
+    res = vkCreateInstance(&instanceCreateInfo, 0, &s_VkInstance);
+    if (res != VK_SUCCESS)
+        return false;
+    volkLoadInstance(s_VkInstance);
+
+    // physical devices
+    uint32_t physicalDeviceCount = 0;
+    res = vkEnumeratePhysicalDevices(s_VkInstance, &physicalDeviceCount, 0);
+    if (res != VK_SUCCESS || physicalDeviceCount == 0)
+        return false;
+    VkPhysicalDevice* physicalDevices = (VkPhysicalDevice*)_alloca(sizeof(VkPhysicalDevice) * physicalDeviceCount);
+    res = vkEnumeratePhysicalDevices(s_VkInstance, &physicalDeviceCount, physicalDevices);
+    if (res != VK_SUCCESS)
+        return false;
+    uint32_t pdi = 0;
+    for (; pdi < physicalDeviceCount; ++pdi)
+    {
+        res = SmolImpl_GetBestComputeQueue(physicalDevices[pdi], &s_VkComputeQueueIndex);
+        if (res == VK_SUCCESS)
+            break;
+    }
+    if (pdi == physicalDeviceCount)
+        return false; // no devices with compute queue found
+
+    // device
+    const float queuePrioritory = 1.0f;
+    const VkDeviceQueueCreateInfo deviceQueueCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, 0, 0, s_VkComputeQueueIndex, 1, &queuePrioritory};
+    const VkDeviceCreateInfo deviceCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, 0, 0, 1, &deviceQueueCreateInfo, 0, 0, 0, 0, 0 };
+    res = vkCreateDevice(physicalDevices[pdi], &deviceCreateInfo, 0, &s_VkDevice);
+    if (res != VK_SUCCESS)
+        return false;
+    vkGetDeviceQueue(s_VkDevice, s_VkComputeQueueIndex, 0, &s_VkComputeQueue);
+
+    // memory properties
+    VkPhysicalDeviceMemoryProperties properties = {};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevices[pdi], &properties);
+    s_VkMemoryTypeHostVisibleNonCoherent = VK_MAX_MEMORY_TYPES;
+    s_VkMemoryTypeHostVisibleCoherent = VK_MAX_MEMORY_TYPES;
+    s_VkMemoryTypeDeviceLocal = VK_MAX_MEMORY_TYPES;
+    for (uint32_t mt = 0; mt < properties.memoryTypeCount; ++mt)
+    {
+        const auto& mem = properties.memoryTypes[mt];
+        if ((s_VkMemoryTypeHostVisibleNonCoherent == VK_MAX_MEMORY_TYPES) && (mem.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !(mem.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            s_VkMemoryTypeHostVisibleNonCoherent = mt;
+        if ((s_VkMemoryTypeHostVisibleCoherent == VK_MAX_MEMORY_TYPES) && (mem.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (mem.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            s_VkMemoryTypeHostVisibleCoherent = mt;
+        if ((s_VkMemoryTypeDeviceLocal == VK_MAX_MEMORY_TYPES) && (mem.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+            s_VkMemoryTypeDeviceLocal = mt;
+    }
+
+    // descriptor pool
+    uint32_t kPoolDescriptorCount = 1024;
+    VkDescriptorPoolSize poolSizes[] =
+    {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kPoolDescriptorCount },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kPoolDescriptorCount },
+    };
+    VkDescriptorPoolCreateInfo poolCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    poolCreateInfo.maxSets = kPoolDescriptorCount;
+    poolCreateInfo.poolSizeCount = sizeof(poolSizes)/sizeof(poolSizes[0]);
+    poolCreateInfo.pPoolSizes = poolSizes;
+    res = vkCreateDescriptorPool(s_VkDevice, &poolCreateInfo, 0, &s_VkDescriptorPool);
+    if (res != VK_SUCCESS)
+        return false;
+
+    // command pool
+    VkCommandPoolCreateInfo commandPoolCreateInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+    commandPoolCreateInfo.queueFamilyIndex = s_VkComputeQueueIndex;
+    res = vkCreateCommandPool(s_VkDevice, &commandPoolCreateInfo, 0, &s_VkCommandPool);
+    if (res != VK_SUCCESS)
+        return false;
+
+    return true;
+}
+
+static void SmolImpl_VkFinishWork()
+{
+    if (!s_VkCommandBuffer)
+        return;
+    VkResult res = vkEndCommandBuffer(s_VkCommandBuffer);
+    SMOL_ASSERT(res == VK_SUCCESS);
+
+    VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &s_VkCommandBuffer;
+    res = vkQueueSubmit(s_VkComputeQueue, 1, &submitInfo, 0);
+    SMOL_ASSERT(res == VK_SUCCESS);
+    vkQueueWaitIdle(s_VkComputeQueue);
+
+    vkFreeCommandBuffers(s_VkDevice, s_VkCommandPool, 1, &s_VkCommandBuffer);
+    s_VkCommandBuffer = 0;
+
+    vkResetDescriptorPool(s_VkDevice, s_VkDescriptorPool, 0);
+}
+
+void SmolComputeDelete()
+{
+    SmolImpl_VkFinishWork();
+    if (s_VkCommandPool) vkDestroyCommandPool(s_VkDevice, s_VkCommandPool, 0); s_VkCommandPool = 0;
+    if (s_VkDescriptorPool) vkDestroyDescriptorPool(s_VkDevice, s_VkDescriptorPool, 0); s_VkDescriptorPool = 0;
+    if (s_VkDevice) vkDestroyDevice(s_VkDevice, 0); s_VkDevice = 0;
+    if (s_VkInstance) vkDestroyInstance(s_VkInstance, 0); s_VkInstance = 0;
+}
+
+SmolBackend SmolComputeGetBackend()
+{
+    return SmolBackend::Vulkan;
+}
+
+struct SmolBuffer
+{
+    VkBuffer buffer = nullptr;
+    VkDeviceMemory memory = nullptr;
+    size_t size = 0;
+    SmolBufferType type = SmolBufferType::Structured;
+    size_t structElementSize = 0;
+    bool writtenByGpuSinceLastRead = false;
+};
+
+SmolBuffer* SmolBufferCreate(size_t byteSize, SmolBufferType type, size_t structElementSize)
+{
+    VkBufferUsageFlags usage = type == SmolBufferType::Constant ? VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkBufferCreateInfo bufferCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, 0, 0, byteSize, usage, VK_SHARING_MODE_EXCLUSIVE, 1, &s_VkComputeQueueIndex };
+    VkBuffer buffer = 0;
+    VkResult res = vkCreateBuffer(s_VkDevice, &bufferCreateInfo, 0, &buffer);
+    if (res != VK_SUCCESS)
+        return nullptr;
+    VkMemoryRequirements requirements = {};
+    vkGetBufferMemoryRequirements(s_VkDevice, buffer, &requirements);
+
+    uint32_t memType = s_VkMemoryTypeHostVisibleNonCoherent != VK_MAX_MEMORY_TYPES ? s_VkMemoryTypeHostVisibleNonCoherent : s_VkMemoryTypeHostVisibleCoherent;
+    const VkMemoryAllocateInfo memoryAllocateInfo = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, 0, requirements.size, memType };
+
+    VkDeviceMemory memory = 0;
+    res = vkAllocateMemory(s_VkDevice, &memoryAllocateInfo, 0, &memory);
+    if (res != VK_SUCCESS)
+    {
+        vkDestroyBuffer(s_VkDevice, buffer, 0);
+        return nullptr;
+    }
+    res = vkBindBufferMemory(s_VkDevice, buffer, memory, 0);
+    if (res != VK_SUCCESS)
+    {
+        vkFreeMemory(s_VkDevice, memory, 0);
+        vkDestroyBuffer(s_VkDevice, buffer, 0);
+        return nullptr;
+    }
+
+    SmolBuffer* buf = new SmolBuffer();
+    buf->buffer = buffer;
+    buf->memory = memory;
+    buf->size = byteSize;
+    buf->type = type;
+    buf->structElementSize = structElementSize;
+    return buf;
+}
+
+void SmolBufferSetData(SmolBuffer* buffer, const void* src, size_t size, size_t dstOffset)
+{
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(dstOffset + size <= buffer->size);
+
+    void* dst = 0;
+    VkResult res = vkMapMemory(s_VkDevice, buffer->memory, dstOffset, size, 0, &dst);
+    if (res != VK_SUCCESS)
+    {
+        SMOL_ASSERT(!"failed to map Vulkan buffer memory for writing");
+        return;
+    }
+    memcpy(dst, src, size);
+    vkUnmapMemory(s_VkDevice, buffer->memory);
+}
+
+void SmolBufferGetData(SmolBuffer* buffer, void* dst, size_t size, size_t srcOffset)
+{
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(srcOffset + size <= buffer->size);
+
+    if (buffer->writtenByGpuSinceLastRead)
+    {
+        SmolImpl_VkFinishWork();
+        buffer->writtenByGpuSinceLastRead = false;
+    }
+
+    void* src = 0;
+    VkResult res = vkMapMemory(s_VkDevice, buffer->memory, srcOffset, size, 0, &src);
+    if (res != VK_SUCCESS)
+    {
+        SMOL_ASSERT(!"failed to map Vulkan buffer memory for reading");
+        return;
+    }
+    memcpy(dst, src, size);
+    vkUnmapMemory(s_VkDevice, buffer->memory);
+}
+
+void SmolBufferDelete(SmolBuffer* buffer)
+{
+    if (buffer == nullptr)
+        return;
+    if (buffer->buffer != 0)
+        vkDestroyBuffer(s_VkDevice, buffer->buffer, 0);
+    if (buffer->memory != 0)
+        vkFreeMemory(s_VkDevice, buffer->memory, 0);
+    delete buffer;
+}
+
+static const int SmolImpl_VkMaxResources = 32;
+
+struct SmolKernel
+{
+    VkShaderModule kernel = nullptr;
+    VkDescriptorSetLayout dsLayout = nullptr;
+    VkPipelineLayout pipeLayout = nullptr;
+    VkPipeline pipeline = nullptr;
+    int localSize[3] = { 0, 0, 0 };
+    VkDescriptorType resourceTypes[SmolImpl_VkMaxResources] = {};
+    uint32_t resourceMask = 0;
+    uint32_t resourceCount = 0;
+};
+
+static const uint32_t SmolImpl_SpvMagicNumber = 0x07230203;
+static const uint32_t SmolImpl_SpvExecutionModelGLCompute = 5;
+static const uint32_t SmolImpl_SpvExecutionModeLocalSize = 17;
+static const uint32_t SmolImpl_SpvDecorationBinding = 33;
+static const uint32_t SmolImpl_SpvDecorationDescriptorSet = 34;
+static const uint32_t SmolImpl_SpvStorageClassUniformConstant = 0;
+static const uint32_t SmolImpl_SpvStorageClassUniform = 2;
+static const uint32_t SmolImpl_SpvStorageClassStorageBuffer = 12;
+
+enum SmolImpl_SpvOp
+{
+    kSmolImpl_SpvOpEntryPoint = 15,
+    kSmolImpl_SpvOpExecutionMode = 16,
+    kSmolImpl_SpvOpTypeImage = 25,
+    kSmolImpl_SpvOpTypeSampler = 26,
+    kSmolImpl_SpvOpTypeSampledImage = 27,
+    kSmolImpl_SpvOpTypeStruct = 30,
+    kSmolImpl_SpvOpTypePointer = 32,
+    kSmolImpl_SpvOpVariable = 59,
+    kSmolImpl_SpvOpDecorate = 71,
+};
+
+static bool SmolImpl_VkParseShaderResources(const uint32_t* code, uint32_t codeSizeInWords, SmolKernel& kernel)
+{
+    if (codeSizeInWords < 5) // SPIR-V header is 5 words
+        return false;
+    if (code[0] != SmolImpl_SpvMagicNumber)
+        return false;
+
+    // Parse code and figure out information about Ids
+    struct Id
+    {
+        uint32_t op = 0;
+        uint32_t typeId = 0;
+        uint32_t storageClass = 0;
+        uint32_t binding = 0;
+        uint32_t set = 0;
+    };
+    const uint32_t boundIdCount = code[3];
+    const auto ids = std::unique_ptr<Id[]>(new Id[boundIdCount]);
+
+    const uint32_t* instr = code + 5;
+    while (instr < code + codeSizeInWords)
+    {
+        uint16_t op = uint16_t(instr[0]);
+        uint16_t instrLen = uint16_t(instr[0] >> 16);
+        switch (op)
+        {
+        case kSmolImpl_SpvOpEntryPoint:
+        {
+            if (instrLen < 2) return false;
+            if (instr[1] != SmolImpl_SpvExecutionModelGLCompute)
+                return false;
+        }
+            break;
+        case kSmolImpl_SpvOpExecutionMode:
+        {
+            if (instrLen < 3) return false;
+            uint32_t mode = instr[2];
+            if (mode == SmolImpl_SpvExecutionModeLocalSize)
+            {
+                if (instrLen != 6) return false;
+                kernel.localSize[0] = instr[3];
+                kernel.localSize[1] = instr[4];
+                kernel.localSize[2] = instr[5];
+            }
+        }
+            break;
+        case kSmolImpl_SpvOpDecorate:
+        {
+            if (instrLen < 3) return false;
+            uint32_t id = instr[1];
+            if (id >= boundIdCount)
+                return false;
+            if (instr[2] == SmolImpl_SpvDecorationDescriptorSet)
+            {
+                if (instrLen != 4) return false;
+                ids[id].set = instr[3];
+            }
+            if (instr[2] == SmolImpl_SpvDecorationBinding)
+            {
+                if (instrLen != 4) return false;
+                ids[id].binding = instr[3];
+            }
+        }
+            break;
+        case kSmolImpl_SpvOpTypeStruct:
+        case kSmolImpl_SpvOpTypeImage:
+        case kSmolImpl_SpvOpTypeSampler:
+        case kSmolImpl_SpvOpTypeSampledImage:
+        {
+            if (instrLen < 2) return false;
+            uint32_t id = instr[1];
+            if (id >= boundIdCount) return false;
+            if (ids[id].op != 0) return false;
+            ids[id].op = op;
+        }
+            break;
+        case kSmolImpl_SpvOpTypePointer:
+        {
+            if (instrLen != 4) return false;
+            uint32_t id = instr[1];
+            if (id >= boundIdCount) return false;
+            if (ids[id].op != 0) return false;
+            ids[id].op = op;
+            ids[id].typeId = instr[3];
+            ids[id].storageClass = instr[2];
+        }
+            break;
+        case kSmolImpl_SpvOpVariable:
+        {
+            if (instrLen < 4) return false;
+            uint32_t id = instr[2];
+            if (id >= boundIdCount) return false;
+            if (ids[id].op != 0) return false;
+            ids[id].op = op;
+            ids[id].typeId = instr[1];
+            ids[id].storageClass = instr[3];
+        }
+            break;
+        }
+        instr += instrLen;
+    }
+
+    // Now find which ones we're interested in (basically "buffers") and record that info into kernel
+    for (uint32_t i = 0; i < boundIdCount; ++i)
+    {
+        Id& id = ids[i];
+        if (id.op == kSmolImpl_SpvOpVariable && (id.storageClass == SmolImpl_SpvStorageClassUniform || id.storageClass == SmolImpl_SpvStorageClassUniformConstant || id.storageClass == SmolImpl_SpvStorageClassStorageBuffer))
+        {
+            if (id.set != 0)
+                return false;
+            if (id.binding >= SmolImpl_VkMaxResources)
+                return false;
+            if (ids[id.typeId].op != kSmolImpl_SpvOpTypePointer)
+                return false;
+
+            uint32_t typeKind = ids[ids[id.typeId].typeId].op;
+
+            switch (typeKind)
+            {
+            case kSmolImpl_SpvOpTypeStruct:
+                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                kernel.resourceMask |= 1 << id.binding;
+                ++kernel.resourceCount;
+                break;
+            case kSmolImpl_SpvOpTypeImage:
+                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                kernel.resourceMask |= 1 << id.binding;
+                ++kernel.resourceCount;
+                break;
+            case kSmolImpl_SpvOpTypeSampler:
+                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_SAMPLER;
+                kernel.resourceMask |= 1 << id.binding;
+                ++kernel.resourceCount;
+                break;
+            case kSmolImpl_SpvOpTypeSampledImage:
+                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                kernel.resourceMask |= 1 << id.binding;
+                ++kernel.resourceCount;
+                break;
+            default:
+                SMOL_ASSERT(!"Unknown resource type");
+            }
+        }
+    }
+    return true;
+}
+
+
+SmolKernel* SmolKernelCreate(const void* shaderCode, size_t shaderCodeSize, const char* entryPoint, SmolKernelCreateFlags flags)
+{
+    // create shader module
+    VkShaderModuleCreateInfo shaderModuleCreateInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, 0, 0, shaderCodeSize, (const uint32_t*)shaderCode };
+    VkShaderModule sm = 0;
+    VkResult res = vkCreateShaderModule(s_VkDevice, &shaderModuleCreateInfo, 0, &sm);
+    if (res != VK_SUCCESS)
+        return nullptr;
+    SmolKernel* kernel = new SmolKernel();
+    kernel->kernel = sm;
+
+    // parse SPIR-V to get resource bindings
+    if (!SmolImpl_VkParseShaderResources((const uint32_t*)shaderCode, (uint32_t)(shaderCodeSize / 4), *kernel))
+    {
+        SmolKernelDelete(kernel);
+        return nullptr;
+    }
+
+    // create descriptor set layout
+    auto setBindings = std::unique_ptr<VkDescriptorSetLayoutBinding[]>(new VkDescriptorSetLayoutBinding[kernel->resourceCount]);
+    uint32_t bindingIdx = 0;
+    for (uint32_t i = 0; i < SmolImpl_VkMaxResources; ++i)
+    {
+        if (!(kernel->resourceMask & (1 << i)))
+            continue;
+        VkDescriptorSetLayoutBinding b = {};
+        b.binding = i;
+        b.descriptorType = kernel->resourceTypes[i];
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        setBindings[bindingIdx++] = b;
+    }
+    VkDescriptorSetLayoutCreateInfo setCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    setCreateInfo.bindingCount = kernel->resourceCount;
+    setCreateInfo.pBindings = setBindings.get();
+    res = vkCreateDescriptorSetLayout(s_VkDevice, &setCreateInfo, 0, &kernel->dsLayout);
+    if (res != VK_SUCCESS)
+    {
+        SmolKernelDelete(kernel);
+        return nullptr;
+    }
+
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipeLayoutCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    pipeLayoutCreateInfo.setLayoutCount = 1;
+    pipeLayoutCreateInfo.pSetLayouts = &kernel->dsLayout;
+    res = vkCreatePipelineLayout(s_VkDevice, &pipeLayoutCreateInfo, 0, &kernel->pipeLayout);
+    if (res != VK_SUCCESS)
+    {
+        SmolKernelDelete(kernel);
+        return nullptr;
+    }
+
+    // create pipeline
+    VkComputePipelineCreateInfo pipeCreateInfo = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+    VkPipelineShaderStageCreateInfo stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = kernel->kernel;
+    stage.pName = entryPoint;
+    pipeCreateInfo.stage = stage;
+    pipeCreateInfo.layout = kernel->pipeLayout;
+    res = vkCreateComputePipelines(s_VkDevice, 0, 1, &pipeCreateInfo, 0, &kernel->pipeline);
+    if (res != VK_SUCCESS)
+    {
+        SmolKernelDelete(kernel);
+        return nullptr;
+    }
+
+    return kernel;
+}
+
+void SmolKernelDelete(SmolKernel* kernel)
+{
+    if (kernel == nullptr)
+        return;
+    if (kernel->kernel != nullptr)
+        vkDestroyShaderModule(s_VkDevice, kernel->kernel, 0);
+    if (kernel->dsLayout != nullptr)
+        vkDestroyDescriptorSetLayout(s_VkDevice, kernel->dsLayout, 0);
+    if (kernel->pipeLayout != nullptr)
+        vkDestroyPipelineLayout(s_VkDevice, kernel->pipeLayout, 0);
+    if (kernel->pipeline != nullptr)
+        vkDestroyPipeline(s_VkDevice, kernel->pipeline, 0);
+    delete kernel;
+}
+
+struct SmolImpl_VulkanState
+{
+    SmolKernel* kernel = nullptr;
+    SmolBuffer* buffers[SmolImpl_VkMaxResources] = {};
+};
+
+static SmolImpl_VulkanState s_VkState;
+
+void SmolKernelSet(SmolKernel* kernel)
+{
+    memset(s_VkState.buffers, 0, sizeof(s_VkState.buffers));
+    s_VkState.kernel = kernel;
+}
+
+void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding)
+{
+    SMOL_ASSERT(buffer);
+    SMOL_ASSERT(buffer->buffer);
+    SMOL_ASSERT(index >= 0 && index < SmolImpl_VkMaxResources);
+    if (binding == SmolBufferBinding::Output)
+        buffer->writtenByGpuSinceLastRead = true;
+    s_VkState.buffers[index] = buffer;
+}
+
+static void SmolImpl_VkStartCmdBufferIfNeeded()
+{
+    if (s_VkCommandBuffer != nullptr)
+        return;
+    VkCommandBufferAllocateInfo cbAllocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+    cbAllocInfo.commandPool = s_VkCommandPool;
+    cbAllocInfo.commandBufferCount = 1;
+    cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    VkResult res = vkAllocateCommandBuffers(s_VkDevice, &cbAllocInfo, &s_VkCommandBuffer);
+    if (res != VK_SUCCESS)
+        return;
+
+    VkCommandBufferBeginInfo cbBeginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    cbBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    res = vkBeginCommandBuffer(s_VkCommandBuffer, &cbBeginInfo);
+    SMOL_ASSERT(res == VK_SUCCESS);
+}
+
+
+void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX, int groupSizeY, int groupSizeZ)
+{
+    SmolKernel* kernel = s_VkState.kernel;
+    SMOL_ASSERT(kernel != nullptr && kernel->pipeline != nullptr);
+    SMOL_ASSERT(kernel->localSize[0] == groupSizeX && kernel->localSize[1] == groupSizeY && kernel->localSize[2] == groupSizeZ);
+
+    // allocate a descriptor set
+    VkDescriptorSetAllocateInfo dsAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    dsAllocInfo.descriptorPool = s_VkDescriptorPool;
+    dsAllocInfo.descriptorSetCount = 1;
+    dsAllocInfo.pSetLayouts = &kernel->dsLayout;
+    VkDescriptorSet ds = 0;
+    VkResult res = vkAllocateDescriptorSets(s_VkDevice, &dsAllocInfo, &ds);
+    if (res != VK_SUCCESS)
+        return;
+
+    // fill descriptor set with binding data
+    VkDescriptorBufferInfo binfos[SmolImpl_VkMaxResources];
+    VkWriteDescriptorSet wds[SmolImpl_VkMaxResources];
+    memset(binfos, 0, sizeof(binfos[0]) * kernel->resourceCount);
+    memset(wds, 0, sizeof(wds[0]) * kernel->resourceCount);
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < SmolImpl_VkMaxResources; ++i)
+    {
+        if (!(kernel->resourceMask & (1 << i)))
+            continue;
+        binfos[idx].buffer = s_VkState.buffers[i] ? s_VkState.buffers[i]->buffer : nullptr;
+        binfos[idx].offset = 0;
+        binfos[idx].range = VK_WHOLE_SIZE;
+        wds[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wds[idx].dstSet = ds;
+        wds[idx].dstBinding = i;
+        wds[idx].descriptorCount = 1;
+        wds[idx].descriptorType = kernel->resourceTypes[i];
+        wds[idx].pBufferInfo = &binfos[idx];
+        ++idx;
+    }
+    vkUpdateDescriptorSets(s_VkDevice, kernel->resourceCount, wds, 0, 0);
+
+    // dispatch
+    int groupsX = (threadsX + groupSizeX - 1) / groupSizeX;
+    int groupsY = (threadsY + groupSizeY - 1) / groupSizeY;
+    int groupsZ = (threadsZ + groupSizeZ - 1) / groupSizeZ;
+    SmolImpl_VkStartCmdBufferIfNeeded();
+    SMOL_ASSERT(s_VkCommandBuffer);
+    vkCmdBindPipeline(s_VkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel->pipeline);
+    vkCmdBindDescriptorSets(s_VkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel->pipeLayout, 0, 1, &ds, 0, 0);
+    vkCmdDispatch(s_VkCommandBuffer, groupsX, groupsY, groupsZ);
+}
+
+void SmolCaptureStart()
+{
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+    if (!s_RenderDocApi)
+        return;
+    s_RenderDocApi->StartFrameCapture(NULL, NULL);
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+}
+
+void SmolCaptureFinish()
+{
+#if SMOL_COMPUTE_ENABLE_RENDERDOC
+    if (!s_RenderDocApi)
+        return;
+    s_RenderDocApi->EndFrameCapture(NULL, NULL);
+#endif // #if SMOL_COMPUTE_ENABLE_RENDERDOC
+}
+
+
+#endif // #if SMOL_COMPUTE_VULKAN
+
+
+
+// ------------------------------------------------------------------------------------------------
 //  Metal
 
 #if SMOL_COMPUTE_METAL
