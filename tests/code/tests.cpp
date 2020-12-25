@@ -179,7 +179,7 @@ int main()
 {
     stm_setup();
     uint64_t tStart = stm_now(), tDur = 0;
-    if (!SmolComputeCreate())
+    if (!SmolComputeCreate(SmolComputeCreateFlags::EnableDebugLayers))
     {
         printf("ERROR: failed to initialize smol_compute\n");
         return 1;
