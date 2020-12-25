@@ -825,6 +825,8 @@ struct SmolKernel
 static const uint32_t SmolImpl_SpvMagicNumber = 0x07230203;
 static const uint32_t SmolImpl_SpvExecutionModelGLCompute = 5;
 static const uint32_t SmolImpl_SpvExecutionModeLocalSize = 17;
+static const uint32_t SmolImpl_SpvDecorationBlock = 2;
+static const uint32_t SmolImpl_SpvDecorationBufferBlock = 3;
 static const uint32_t SmolImpl_SpvDecorationBinding = 33;
 static const uint32_t SmolImpl_SpvDecorationDescriptorSet = 34;
 static const uint32_t SmolImpl_SpvStorageClassUniformConstant = 0;
@@ -859,6 +861,7 @@ static bool SmolImpl_VkParseShaderResources(const uint32_t* code, uint32_t codeS
         uint32_t storageClass = 0;
         uint32_t binding = 0;
         uint32_t set = 0;
+        bool bufferBlock = false;
     };
     const uint32_t boundIdCount = code[3];
     const auto ids = std::unique_ptr<Id[]>(new Id[boundIdCount]);
@@ -905,6 +908,14 @@ static bool SmolImpl_VkParseShaderResources(const uint32_t* code, uint32_t codeS
             {
                 if (instrLen != 4) return false;
                 ids[id].binding = instr[3];
+            }
+            if (instr[2] == SmolImpl_SpvDecorationBlock)
+            {
+                ids[id].bufferBlock = false;
+            }
+            if (instr[2] == SmolImpl_SpvDecorationBufferBlock)
+            {
+                ids[id].bufferBlock = true;
             }
         }
             break;
@@ -956,35 +967,23 @@ static bool SmolImpl_VkParseShaderResources(const uint32_t* code, uint32_t codeS
                 return false;
             if (id.binding >= SmolImpl_VkMaxResources)
                 return false;
+            // type of the variable should be a pointer
             if (ids[id.typeId].op != kSmolImpl_SpvOpTypePointer)
                 return false;
 
-            uint32_t typeKind = ids[ids[id.typeId].typeId].op;
+            // get type of the pointer
+            const Id& ptrTypeId = ids[ids[id.typeId].typeId];
+            uint32_t typeKind = ptrTypeId.op;
 
             switch (typeKind)
             {
             case kSmolImpl_SpvOpTypeStruct:
-                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                kernel.resourceMask |= 1 << id.binding;
-                ++kernel.resourceCount;
-                break;
-            case kSmolImpl_SpvOpTypeImage:
-                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                kernel.resourceMask |= 1 << id.binding;
-                ++kernel.resourceCount;
-                break;
-            case kSmolImpl_SpvOpTypeSampler:
-                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_SAMPLER;
-                kernel.resourceMask |= 1 << id.binding;
-                ++kernel.resourceCount;
-                break;
-            case kSmolImpl_SpvOpTypeSampledImage:
-                kernel.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                kernel.resourceTypes[id.binding] = ptrTypeId.bufferBlock ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 kernel.resourceMask |= 1 << id.binding;
                 ++kernel.resourceCount;
                 break;
             default:
-                SMOL_ASSERT(!"Unknown resource type");
+                SMOL_ASSERT(!"Unsupported Vulkan resource type");
             }
         }
     }
