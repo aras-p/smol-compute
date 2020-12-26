@@ -1,4 +1,5 @@
 #include "../../source/smolcompute.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,6 +185,17 @@ int main()
         printf("ERROR: failed to initialize smol_compute\n");
         return 1;
     }
+
+    const SmolBackend backend = SmolComputeGetBackend();
+    const char* backendName = "";
+    switch (backend)
+    {
+    case SmolBackend::D3D11: backendName = "D3D11"; break;
+    case SmolBackend::Vulkan: backendName = "Vulkan"; break;
+    case SmolBackend::Metal: backendName = "Metal"; break;
+    default: assert(!"Unknown backend");
+    }
+    printf("Running tests on backend %s...\n", backendName);
 
     bool ok = false;
     if (!SmokeTest())

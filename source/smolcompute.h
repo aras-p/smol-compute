@@ -494,7 +494,7 @@ void SmolCaptureFinish()
 #if SMOL_COMPUTE_VULKAN
 
 
-// -------- Tiny vk_platform.h equivalent for our limited use case
+// -------- Tiny vk_platform.h equivalent
 
 #if defined(_WIN32)
     #define VKAPI_ATTR
@@ -508,7 +508,7 @@ void SmolCaptureFinish()
 #include <stddef.h>
 #include <stdint.h>
 
-// -------- Tiny vulkan_core.h equivalent for our limited use case
+// -------- Tiny vulkan_core.h equivalent
 
 #define VK_DEFINE_HANDLE(object) typedef struct object##_T* object;
 #define VK_DEFINE_NON_DISPATCHABLE_HANDLE(object) typedef struct object##_T *object;
@@ -1119,63 +1119,61 @@ typedef VkResult(VKAPI_PTR* PFN_vkCreateDebugReportCallbackEXT)(VkInstance insta
 typedef void (VKAPI_PTR* PFN_vkDestroyDebugReportCallbackEXT)(VkInstance instance, VkDebugReportCallbackEXT callback, const VkAllocationCallbacks* pAllocator);
 
 
-// Manually loaded minimal set of Vulkan function pointers that we need, so that we don't
-// have to link with the loader.
-extern "C" {
-    // Vulkan 1.0
-    static PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers;
-    static PFN_vkAllocateDescriptorSets vkAllocateDescriptorSets;
-    static PFN_vkAllocateMemory vkAllocateMemory;
-    static PFN_vkBeginCommandBuffer vkBeginCommandBuffer;
-    static PFN_vkBindBufferMemory vkBindBufferMemory;
-    static PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets;
-    static PFN_vkCmdBindPipeline vkCmdBindPipeline;
-    static PFN_vkCmdDispatch vkCmdDispatch;
-    static PFN_vkCmdExecuteCommands vkCmdExecuteCommands;
-    static PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer;
-    static PFN_vkCreateBuffer vkCreateBuffer;
-    static PFN_vkCreateCommandPool vkCreateCommandPool;
-    static PFN_vkCreateComputePipelines vkCreateComputePipelines;
-    static PFN_vkCreateDescriptorPool vkCreateDescriptorPool;
-    static PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout;
-    static PFN_vkCreateDevice vkCreateDevice;
-    static PFN_vkCreateInstance vkCreateInstance;
-    static PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
-    static PFN_vkCreateShaderModule vkCreateShaderModule;
-    static PFN_vkDestroyBuffer vkDestroyBuffer;
-    static PFN_vkDestroyCommandPool vkDestroyCommandPool;
-    static PFN_vkDestroyDescriptorPool vkDestroyDescriptorPool;
-    static PFN_vkDestroyDescriptorSetLayout vkDestroyDescriptorSetLayout;
-    static PFN_vkDestroyDevice vkDestroyDevice;
-    static PFN_vkDestroyInstance vkDestroyInstance;
-    static PFN_vkDestroyPipeline vkDestroyPipeline;
-    static PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout;
-    static PFN_vkDestroyShaderModule vkDestroyShaderModule;
-    static PFN_vkDeviceWaitIdle vkDeviceWaitIdle;
-    static PFN_vkEndCommandBuffer vkEndCommandBuffer;
-    static PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
-    static PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
-    static PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
-    static PFN_vkFreeDescriptorSets vkFreeDescriptorSets;
-    static PFN_vkFreeMemory vkFreeMemory;
-    static PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
-    static PFN_vkGetDeviceQueue vkGetDeviceQueue;
-    static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
-    static PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties;
-    static PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
-    static PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges;
-    static PFN_vkMapMemory vkMapMemory;
-    static PFN_vkQueueSubmit vkQueueSubmit;
-    static PFN_vkQueueWaitIdle vkQueueWaitIdle;
-    static PFN_vkResetCommandBuffer vkResetCommandBuffer;
-    static PFN_vkResetCommandPool vkResetCommandPool;
-    static PFN_vkResetDescriptorPool vkResetDescriptorPool;
-    static PFN_vkUnmapMemory vkUnmapMemory;
-    static PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets;
-    // VK_EXT_debug_report
-    static PFN_vkCreateDebugReportCallbackEXT vkCreateDebugReportCallbackEXT;
-    static PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallbackEXT;
-} // extern "C"
+// -------- Tiny vulkan loader
+
+// Vulkan 1.0
+static PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers;
+static PFN_vkAllocateDescriptorSets vkAllocateDescriptorSets;
+static PFN_vkAllocateMemory vkAllocateMemory;
+static PFN_vkBeginCommandBuffer vkBeginCommandBuffer;
+static PFN_vkBindBufferMemory vkBindBufferMemory;
+static PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets;
+static PFN_vkCmdBindPipeline vkCmdBindPipeline;
+static PFN_vkCmdDispatch vkCmdDispatch;
+static PFN_vkCmdExecuteCommands vkCmdExecuteCommands;
+static PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer;
+static PFN_vkCreateBuffer vkCreateBuffer;
+static PFN_vkCreateCommandPool vkCreateCommandPool;
+static PFN_vkCreateComputePipelines vkCreateComputePipelines;
+static PFN_vkCreateDescriptorPool vkCreateDescriptorPool;
+static PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout;
+static PFN_vkCreateDevice vkCreateDevice;
+static PFN_vkCreateInstance vkCreateInstance;
+static PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
+static PFN_vkCreateShaderModule vkCreateShaderModule;
+static PFN_vkDestroyBuffer vkDestroyBuffer;
+static PFN_vkDestroyCommandPool vkDestroyCommandPool;
+static PFN_vkDestroyDescriptorPool vkDestroyDescriptorPool;
+static PFN_vkDestroyDescriptorSetLayout vkDestroyDescriptorSetLayout;
+static PFN_vkDestroyDevice vkDestroyDevice;
+static PFN_vkDestroyInstance vkDestroyInstance;
+static PFN_vkDestroyPipeline vkDestroyPipeline;
+static PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout;
+static PFN_vkDestroyShaderModule vkDestroyShaderModule;
+static PFN_vkDeviceWaitIdle vkDeviceWaitIdle;
+static PFN_vkEndCommandBuffer vkEndCommandBuffer;
+static PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
+static PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
+static PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
+static PFN_vkFreeDescriptorSets vkFreeDescriptorSets;
+static PFN_vkFreeMemory vkFreeMemory;
+static PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
+static PFN_vkGetDeviceQueue vkGetDeviceQueue;
+static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+static PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties;
+static PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
+static PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges;
+static PFN_vkMapMemory vkMapMemory;
+static PFN_vkQueueSubmit vkQueueSubmit;
+static PFN_vkQueueWaitIdle vkQueueWaitIdle;
+static PFN_vkResetCommandBuffer vkResetCommandBuffer;
+static PFN_vkResetCommandPool vkResetCommandPool;
+static PFN_vkResetDescriptorPool vkResetDescriptorPool;
+static PFN_vkUnmapMemory vkUnmapMemory;
+static PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets;
+// VK_EXT_debug_report
+static PFN_vkCreateDebugReportCallbackEXT vkCreateDebugReportCallbackEXT;
+static PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallbackEXT;
 
 static VkResult SmolImpl_VkInitialize()
 {
@@ -1240,6 +1238,8 @@ static void SmolImpl_VkLoadInstanceFunctions(VkInstance instance)
     vkCreateDebugReportCallbackEXT = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
     vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
 }
+
+// -------- Actual Vulkan code starts here
 
 #include <malloc.h>
 #include <memory>
