@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include "external/sokol_time.h"
 #include "external/stb_image.h"
@@ -510,11 +511,16 @@ bool IspcCompressBC3Test()
     bool ok = false;
 
     const int kGroupSize = 8;
-#ifdef _MSC_VER
-#define kExtension "hlsl"
-#else
-#define kExtension "metal"
-#endif
+    const SmolBackend backend = SmolComputeGetBackend();
+    const char* shaderFile = nullptr;
+    if (backend == SmolBackend::D3D11)
+        shaderFile = "tests/data/ispc-compress-bc3/kernel.hlsl";
+    else if (backend == SmolBackend::Metal)
+        shaderFile = "tests/data/ispc-compress-bc3/kernel.metal";
+    else if (backend == SmolBackend::Vulkan)
+        shaderFile = "tests/data/ispc-compress-bc3/kernel.spv";
+    else
+        assert(false);
 
 
     size_t inputSize, outputSize, kernelSourceSize;
@@ -540,7 +546,7 @@ bool IspcCompressBC3Test()
         printf("ERROR: IspcCompressBC3Test: failed to read output bytes\n");
         goto _cleanup;
     }
-    kernelSource = ReadFile("tests/data/ispc-compress-bc3/kernel." kExtension, &kernelSourceSize);
+    kernelSource = ReadFile(shaderFile, &kernelSourceSize);
     if (kernelSource == nullptr)
     {
         printf("ERROR: IspcCompressBC3Test: failed to read shader source\n");
