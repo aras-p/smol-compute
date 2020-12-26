@@ -1,7 +1,7 @@
 # smol-compute: a small library for compute shader stuffs
 
 A tiny library that allows creating some data buffers and launching compute shaders
-on the GPU. With D3D11 and Metal implementations at the moment.
+on the GPU. With D3D11, Metal and Vulkan implementations at the moment.
 
 **Very very work in progress**, you really don't want to use it for anything yet.
 
