@@ -11,6 +11,7 @@ static bool SmokeTest()
     bool ok = false;
     
     SmolBuffer* bufInput = nullptr;
+    SmolBuffer* bufMid = nullptr;
     SmolBuffer* bufOutput = nullptr;
     SmolKernel* cs = nullptr;
     const char* kernelCode = nullptr;
@@ -19,8 +20,10 @@ static bool SmokeTest()
 
     const int kInputSize = 1024;
     const int kGroupSize = 16;
-    const int kOutputSize = kInputSize / kGroupSize;
+    const int kMidSize = kInputSize / kGroupSize;
+    const int kOutputSize = kMidSize / kGroupSize;
     bufInput = SmolBufferCreate(kInputSize*4, SmolBufferType::Structured, 4);
+    bufMid = SmolBufferCreate(kMidSize * 4, SmolBufferType::Structured, 4);
     bufOutput = SmolBufferCreate(kOutputSize*4, SmolBufferType::Structured, 4);
     int input[kInputSize];
     for (int i = 0; i < kInputSize; ++i)
@@ -141,18 +144,33 @@ kernel void kernelFunc(
         printf("ERROR: SmokeTest: failed to create compute shader\n");
         goto _cleanup;
     }
-    
+
+    // first dispatch: input->mid calculation
     SmolKernelSet(cs);
     SmolKernelSetBuffer(bufInput, 0);
-    SmolKernelSetBuffer(bufOutput, 1, SmolBufferBinding::Output);
+    SmolKernelSetBuffer(bufMid, 1, SmolBufferBinding::Output);
     SmolKernelDispatch(kInputSize, 1, 1, kGroupSize, 1, 1);
-    
+
+    // second dispatch: mid->output calculation
+    SmolKernelSet(cs);
+    SmolKernelSetBuffer(bufMid, 0);
+    SmolKernelSetBuffer(bufOutput, 1, SmolBufferBinding::Output);
+    SmolKernelDispatch(kMidSize, 1, 1, kGroupSize, 1, 1);
+
+    int midCheck[kMidSize];
+    for (int i = 0; i < kMidSize; ++i)
+    {
+        int res = 0;
+        for (int j = 0; j < kGroupSize; ++j)
+            res += input[i * kGroupSize + j];
+        midCheck[i] = res;
+    }
     int outputCheck[kOutputSize];
     for (int i = 0; i < kOutputSize; ++i)
     {
         int res = 0;
         for (int j = 0; j < kGroupSize; ++j)
-            res += input[i*kGroupSize+j];
+            res += midCheck[i * kGroupSize + j];
         outputCheck[i] = res;
     }
     int output[kOutputSize];
@@ -169,6 +187,7 @@ kernel void kernelFunc(
 
 _cleanup:
     SmolBufferDelete(bufInput);
+    SmolBufferDelete(bufMid);
     SmolBufferDelete(bufOutput);
     SmolKernelDelete(cs);
     return ok;
