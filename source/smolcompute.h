@@ -411,6 +411,9 @@ void SmolKernelDelete(SmolKernel* kernel)
 void SmolKernelSet(SmolKernel* kernel)
 {
     s_D3D11Context->CSSetShader(kernel->kernel, NULL, 0);
+    // when setting up kernel, unbind any previously bound output buffers
+    ID3D11UnorderedAccessView* nullUavs[8] = {};
+    s_D3D11Context->CSSetUnorderedAccessViews(0, 8, nullUavs, nullptr);
 }
 
 void SmolKernelSetBuffer(SmolBuffer* buffer, int index, SmolBufferBinding binding)
