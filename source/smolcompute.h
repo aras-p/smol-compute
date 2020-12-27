@@ -774,6 +774,30 @@ typedef enum VkCommandBufferResetFlagBits {
 } VkCommandBufferResetFlagBits;
 typedef VkFlags VkCommandBufferResetFlags;
 
+typedef VkFlags VkDependencyFlags;
+
+typedef enum VkAccessFlagBits {
+    VK_ACCESS_INDIRECT_COMMAND_READ_BIT = 0x00000001,
+    VK_ACCESS_INDEX_READ_BIT = 0x00000002,
+    VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT = 0x00000004,
+    VK_ACCESS_UNIFORM_READ_BIT = 0x00000008,
+    VK_ACCESS_INPUT_ATTACHMENT_READ_BIT = 0x00000010,
+    VK_ACCESS_SHADER_READ_BIT = 0x00000020,
+    VK_ACCESS_SHADER_WRITE_BIT = 0x00000040,
+    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT = 0x00000080,
+    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT = 0x00000100,
+    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT = 0x00000200,
+    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT = 0x00000400,
+    VK_ACCESS_TRANSFER_READ_BIT = 0x00000800,
+    VK_ACCESS_TRANSFER_WRITE_BIT = 0x00001000,
+    VK_ACCESS_HOST_READ_BIT = 0x00002000,
+    VK_ACCESS_HOST_WRITE_BIT = 0x00004000,
+    VK_ACCESS_MEMORY_READ_BIT = 0x00008000,
+    VK_ACCESS_MEMORY_WRITE_BIT = 0x00010000,
+} VkAccessFlagBits;
+
+typedef VkFlags VkAccessFlags;
+
 struct VkAllocationCallbacks;
 typedef void (VKAPI_PTR* PFN_vkVoidFunction)(void);
 
@@ -1034,6 +1058,27 @@ typedef struct VkCommandBufferBeginInfo {
 
 struct VkCopyDescriptorSet;
 
+typedef struct VkMemoryBarrier {
+    VkStructureType    sType;
+    const void*        pNext;
+    VkAccessFlags      srcAccessMask;
+    VkAccessFlags      dstAccessMask;
+} VkMemoryBarrier;
+
+typedef struct VkBufferMemoryBarrier {
+    VkStructureType    sType;
+    const void*        pNext;
+    VkAccessFlags      srcAccessMask;
+    VkAccessFlags      dstAccessMask;
+    uint32_t           srcQueueFamilyIndex;
+    uint32_t           dstQueueFamilyIndex;
+    VkBuffer           buffer;
+    VkDeviceSize       offset;
+    VkDeviceSize       size;
+} VkBufferMemoryBarrier;
+
+struct VkImageMemoryBarrier;
+
 typedef VkResult(VKAPI_PTR* PFN_vkAllocateCommandBuffers)(VkDevice device, const VkCommandBufferAllocateInfo* pAllocateInfo, VkCommandBuffer* pCommandBuffers);
 typedef VkResult(VKAPI_PTR* PFN_vkAllocateDescriptorSets)(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pDescriptorSets);
 typedef VkResult(VKAPI_PTR* PFN_vkAllocateMemory)(VkDevice device, const VkMemoryAllocateInfo* pAllocateInfo, const VkAllocationCallbacks* pAllocator, VkDeviceMemory* pMemory);
@@ -1043,6 +1088,7 @@ typedef void (VKAPI_PTR* PFN_vkCmdBindDescriptorSets)(VkCommandBuffer commandBuf
 typedef void (VKAPI_PTR* PFN_vkCmdBindPipeline)(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipeline pipeline);
 typedef void (VKAPI_PTR* PFN_vkCmdDispatch)(VkCommandBuffer commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
 typedef void (VKAPI_PTR* PFN_vkCmdExecuteCommands)(VkCommandBuffer commandBuffer, uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers);
+typedef void (VKAPI_PTR* PFN_vkCmdPipelineBarrier)(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask, VkDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const VkBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier* pImageMemoryBarriers);
 typedef void (VKAPI_PTR* PFN_vkCmdUpdateBuffer)(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize dataSize, const void* pData);
 typedef VkResult(VKAPI_PTR* PFN_vkCreateBuffer)(VkDevice device, const VkBufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBuffer* pBuffer);
 typedef VkResult(VKAPI_PTR* PFN_vkCreateCommandPool)(VkDevice device, const VkCommandPoolCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkCommandPool* pCommandPool);
@@ -1134,6 +1180,7 @@ static PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets;
 static PFN_vkCmdBindPipeline vkCmdBindPipeline;
 static PFN_vkCmdDispatch vkCmdDispatch;
 static PFN_vkCmdExecuteCommands vkCmdExecuteCommands;
+static PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier;
 static PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer;
 static PFN_vkCreateBuffer vkCreateBuffer;
 static PFN_vkCreateCommandPool vkCreateCommandPool;
@@ -1199,6 +1246,7 @@ static void SmolImpl_VkLoadInstanceFunctions(VkInstance instance)
     vkCmdBindPipeline = (PFN_vkCmdBindPipeline)vkGetInstanceProcAddr(instance, "vkCmdBindPipeline");
     vkCmdDispatch = (PFN_vkCmdDispatch)vkGetInstanceProcAddr(instance, "vkCmdDispatch");
     vkCmdExecuteCommands = (PFN_vkCmdExecuteCommands)vkGetInstanceProcAddr(instance, "vkCmdExecuteCommands");
+    vkCmdPipelineBarrier = (PFN_vkCmdPipelineBarrier)vkGetInstanceProcAddr(instance, "vkCmdPipelineBarrier");
     vkCmdUpdateBuffer = (PFN_vkCmdUpdateBuffer)vkGetInstanceProcAddr(instance, "vkCmdUpdateBuffer");
     vkCreateBuffer = (PFN_vkCreateBuffer)vkGetInstanceProcAddr(instance, "vkCreateBuffer");
     vkCreateCommandPool = (PFN_vkCreateCommandPool)vkGetInstanceProcAddr(instance, "vkCreateCommandPool");
@@ -1916,6 +1964,12 @@ void SmolKernelDispatch(int threadsX, int threadsY, int threadsZ, int groupSizeX
     int groupsZ = (threadsZ + groupSizeZ - 1) / groupSizeZ;
     SmolImpl_VkStartCmdBufferIfNeeded();
     SMOL_ASSERT(s_VkCommandBuffer);
+
+    //@TODO: this is suboptimal, we only need a barrier if our dispatch inputs are in flight as outputs of previous dispatches
+    //@TODO: we probably also need a memory barrier? not sure just yet :)
+    vkCmdPipelineBarrier(s_VkCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
+
+    // bind compute pipeline, resources and dispatch
     vkCmdBindPipeline(s_VkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel->pipeline);
     vkCmdBindDescriptorSets(s_VkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel->pipeLayout, 0, 1, &ds, 0, 0);
     vkCmdDispatch(s_VkCommandBuffer, groupsX, groupsY, groupsZ);
